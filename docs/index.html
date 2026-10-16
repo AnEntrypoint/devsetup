@@ -352,7 +352,15 @@ sudo docker build -t dev-desktop:latest .
 <p>For each sandbox, make a Start icon that runs <code>launch.sh devN</code> with <code>Terminal=false</code>, and a Stop icon that runs <code>stop.sh devN</code>. Mark them trusted with <code>gio set &lt;file&gt; metadata::trusted true</code>. The Start icon needs no terminal, because the launcher opens the browser itself.</p>
 
 <h3>Per-sandbox state</h3>
+<p>Kaggle credentials follow the same pattern, in <code>/data/sandboxes/devN/creds/kaggle</code>, mounted as <code>~/.kaggle</code>.</p>
+<p>Sandboxes run with <code>no-new-privileges</code>, so <code>sudo</code> is refused inside them. That's deliberate. Anything that needs root has to run on the host.</p>
 <p>Each sandbox keeps its own gh and gcloud folders under <code>/data/sandboxes/devN/creds</code>. They're mounted into the sandbox, so they survive the home reset. A sandbox's gh login is seeded from the template on its first start. gcloud still needs <code>gcloud auth login</code> in each sandbox.</p>
+
+<h3>Skills in the template</h3>
+<p>Skills are copied into the template, so every new sandbox gets them on its next start. The <code>skills</code> CLI ignores <code>--skill</code> when you pass it through <code>npx</code>, so check what it installed:</p>
+<pre><code>cd /tmp
+HOME=/data/sandboxes/shared-home npx -y skills@latest add mattpocock/skills --skill=grill-me -g -a claude-code -y --copy</code></pre>
+<p>Run it with <code>HOME</code> set to the template, so the skills land in its <code>.claude/skills</code>. Use <code>--copy</code> so nothing links back to a store outside the template. This install added the whole repository, 36 skills, and we removed all but <code>grill-me</code>, along with the <code>.agents</code> lock folder it created. Check the result by starting a sandbox and listing <code>/config/.claude/skills</code>.</p>
 
 <h2 id="shared">16. What is shared, and what is not</h2>
 <table>
@@ -377,6 +385,8 @@ sudo docker build -t dev-desktop:latest .
   <li><strong>gcloud:</strong> refresh the shared SDK after upgrading on the host (section 10).</li>
   <li><strong>Template:</strong> edits apply to sandboxes on their next start, since every start clones the template again.</li>
   <li><strong>Windows partition:</strong> it's mounted read-only and by hand, not from fstab. Mount it with <code>-o ro</code> and leave it read-only, so Windows' hibernation or fast startup can't corrupt it.</li>
+  <li><strong>Kaggle:</strong> the CLI is shared, but each sandbox keeps its own token. Do not copy the host token into the template unless you choose to.</li>
+  <li><strong>Deleting files in the workspace:</strong> git makes its pack files read-only, and <code>rm -r</code> asks for each one. The template aliases <code>rm</code> to <code>rm -f</code> for interactive shells, so deletes don't stop partway. The files belong to the sandbox user, so no sudo is needed.</li>
   <li><strong>Checks:</strong> <code>findmnt -t btrfs</code> should list every data path, <code>systemctl --failed</code> should be empty, and <code>findmnt -n -o OPTIONS /</code> should start with <code>rw</code>.</li>
 </ul>
 
@@ -387,6 +397,7 @@ sudo docker build -t dev-desktop:latest .
   <li><strong>The home directory</strong> is still on the system drive. The btrfs move is planned, not done.</li>
   <li><strong>The gcloud SDK</strong> in <code>/data/cache</code> is a copy, so it doesn't follow apt upgrades.</li>
   <li><strong>The sandbox GitHub login</strong> is a copied token. Replace it with a fine-grained token (section 15).</li>
+  <li><strong>npx and install scripts:</strong> npm 12 blocks install scripts in <code>npx</code> runs, so install packages that need them globally instead (section 9).</li>
   <li><strong>Shared Claude login and history</strong> mean one account is used by every sandbox, and token refreshes and session records are shared as well.</li>
 </ul>
 </main>
