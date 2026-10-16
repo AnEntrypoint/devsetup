@@ -405,6 +405,21 @@ HOME=/data/sandboxes/shared-home npx -y skills@latest add mattpocock/skills --sk
   <li><strong>Checks:</strong> <code>findmnt -t btrfs</code> should list every data path, <code>systemctl --failed</code> should be empty, and <code>findmnt -n -o OPTIONS /</code> should start with <code>rw</code>.</li>
 </ul>
 
+<h3>Laptop and hardware notes</h3>
+<ul>
+  <li><strong>Hybrid GPU:</strong> <code>nvidia-smi</code>, and any display query such as <code>xrandr</code> run at login, wakes the discrete GPU. Monitoring should read sysfs only, and refresh-rate changes cost battery.</li>
+  <li><strong>Wake from suspend:</strong> disabling wake sources in sysfs is not enough when the firmware arms GPIO pins. Check <code>/proc/acpi/wakeup</code> and <code>/sys/kernel/debug/gpio</code>, then set the keyboard wake option in the BIOS. Disabling RTC wake also stops timers such as the 03:00 dedup from waking a suspended machine.</li>
+  <li><strong>Windows partition:</strong> if <code>hiberfil.sys</code> exists or Fast Startup is on, mount NTFS read-only. A read-write mount can corrupt Windows state.</li>
+  <li><strong>Battery:</strong> a charge limit (for example 80%), the energy performance preference and the display timers can each be set on battery; none of these are set by default.</li>
+  <li><strong>Touchpad:</strong> XFCE reads libinput settings from <code>/etc/X11/xorg.conf.d</code>, not from GNOME's gsettings. Runtime <code>xinput</code> changes are lost at reboot.</li>
+</ul>
+<h3>Trust decisions to review</h3>
+<ul>
+  <li>The apt keyrings for gh and gcloud are fetched over HTTPS without a fingerprint check. Compare the fingerprint with the vendor's published value if the machine is sensitive.</li>
+  <li>Installing Zed or Chrome with a <code>curl | sh</code> installer or a loose <code>.deb</code> skips signature checks. Prefer the apt repository or flatpak.</li>
+  <li>The sandbox sudo rule and the passwordless sudo rule trade convenience for risk. Use them on single-user machines only.</li>
+</ul>
+
 <h2 id="gaps">18. Known gaps</h2>
 <ul>
   <li><strong>apt packages</strong> under <code>/usr</code> (compilers, libraries) stay on the system drive. Only the download cache has moved.</li>

@@ -34,6 +34,8 @@ if [ -n "${DEVSETUP_UI:-}" ]; then UI="$DEVSETUP_UI"
 elif [ -t 0 ] && command -v whiptail >/dev/null 2>&1; then UI=whiptail; fi
 SUDO=""
 [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+# Retries and timeouts so a stalled mirror fails fast instead of hanging for minutes.
+APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
 
 MODULES_ALL="storage boot sudo env apt rust go node uv npm git docker flatpak dedup gcloud kaggle sandboxes gm skills"
 MODULE_LABELS=(
@@ -348,10 +350,11 @@ PY
 mod_sudo() {
     log "== sudo: passwordless for $(id -un)"
     log "  warning: anything running as this user can become root without a password."
-    put /tmp/devsetup-sudoers <<<"$(id -un) ALL=(ALL) NOPASSWD: ALL"
-    run $SUDO install -m 0440 -o root -g root /tmp/devsetup-sudoers "/etc/sudoers.d/90-$(id -un)-nopasswd"
+    local tmp; tmp="$(mktemp -d)"; chmod 700 "$tmp"
+    printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$(id -un)" >"$tmp/sudoers"
+    run $SUDO install -m 0440 -o root -g root "$tmp/sudoers" "/etc/sudoers.d/90-$(id -un)-nopasswd"
     run $SUDO visudo -cf "/etc/sudoers.d/90-$(id -un)-nopasswd"
-    rm -f /tmp/devsetup-sudoers
+    rm -rf "$tmp"
 }
 
 mod_env() {
@@ -376,8 +379,12 @@ EOF
 
 mod_apt() {
     log "== apt: build tools"
-    run $SUDO apt-get update
-    run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential cmake ninja-build pkg-config \
+    # The installer's CD-ROM source breaks every apt update once the disc is gone.
+    if [ -f /etc/apt/sources.list.d/cdrom.sources ]; then
+        run $SUDO mv /etc/apt/sources.list.d/cdrom.sources /etc/apt/sources.list.d/cdrom.sources.disabled
+    fi
+    run $SUDO apt-get $APT_OPTS update
+    run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get $APT_OPTS install -y build-essential cmake ninja-build pkg-config \
         libssl-dev libffi-dev zlib1g-dev libsqlite3-dev unzip jq git curl ca-certificates gnupg
 }
 
@@ -513,7 +520,7 @@ mod_git() {
 
 mod_docker() {
     log "== docker: data root on /data"
-    run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-v2
+    run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get $APT_OPTS install -y docker.io docker-compose-v2
     if [ "$DRY" = 1 ]; then log "  + merge data-root=/data/docker into /etc/docker/daemon.json"; else
         local cur="{}"; [ -f /etc/docker/daemon.json ] && cur="$(cat /etc/docker/daemon.json)"
         printf '%s' "$cur" | python3 -c '
@@ -529,7 +536,7 @@ print(json.dumps(d, indent=2))' | $SUDO tee /etc/docker/daemon.json >/dev/null
 
 mod_flatpak() {
     log "== flatpak: system installation on /data"
-    run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y flatpak
+    run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get $APT_OPTS install -y flatpak
     run $SUDO mkdir -p /data/flatpak
     if [ "$DRY" != 1 ] && [ -d /var/lib/flatpak ] && [ ! -L /var/lib/flatpak ]; then
         $SUDO cp -a /var/lib/flatpak/. /data/flatpak/ && $SUDO rm -rf /var/lib/flatpak
@@ -548,9 +555,10 @@ mod_flatpak() {
 
 mod_dedup() {
     log "== dedup: weekly non-destructive dedup of /data"
-    run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y duperemove
+    run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get $APT_OPTS install -y duperemove
     if [ "$DRY" != 1 ]; then
-        cat >/tmp/devsetup-dedup.service <<'EOF'
+        local dtmp; dtmp="$(mktemp -d)"; chmod 700 "$dtmp"
+        cat >"$dtmp/dedup-data.service" <<'EOF'
 [Unit]
 Description=Non-destructive btrfs dedup (shared extents) for /data
 [Service]
@@ -559,7 +567,7 @@ Nice=19
 IOSchedulingClass=idle
 ExecStart=/usr/bin/duperemove -r -d --hashfile=/data/cache/duperemove.db --io-threads=4 --cpu-threads=8 /data/projects /data/models /data/cache
 EOF
-        cat >/tmp/devsetup-dedup.timer <<'EOF'
+        cat >"$dtmp/dedup-data.timer" <<'EOF'
 [Unit]
 Description=Weekly dedup of /data
 [Timer]
@@ -568,9 +576,9 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
-        $SUDO install -m 0644 /tmp/devsetup-dedup.service /etc/systemd/system/dedup-data.service
-        $SUDO install -m 0644 /tmp/devsetup-dedup.timer /etc/systemd/system/dedup-data.timer
-        rm -f /tmp/devsetup-dedup.service /tmp/devsetup-dedup.timer
+        $SUDO install -m 0644 "$dtmp/dedup-data.service" /etc/systemd/system/dedup-data.service
+        $SUDO install -m 0644 "$dtmp/dedup-data.timer" /etc/systemd/system/dedup-data.timer
+        rm -rf "$dtmp"
     else
         log "  + install dedup-data.service and dedup-data.timer (weekly, Sunday 03:00)"
     fi
@@ -586,8 +594,8 @@ mod_gcloud() {
             curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | $SUDO gpg --dearmor -o /etc/apt/keyrings/cloud.google.gpg
             echo "deb [signed-by=/etc/apt/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | $SUDO tee /etc/apt/sources.list.d/google-cloud-sdk.list >/dev/null
         fi
-        run $SUDO apt-get update
-        run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y google-cloud-cli
+        run $SUDO apt-get $APT_OPTS update
+        run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get $APT_OPTS install -y google-cloud-cli
     fi
     run $SUDO rm -rf /data/cache/google-cloud-sdk
     run $SUDO cp -a /usr/lib/google-cloud-sdk /data/cache/google-cloud-sdk
@@ -753,7 +761,7 @@ summary() {
     log "modules: $MODULES"
     log "log: $LOG"
     if wants storage || wants boot; then log "reboot is recommended so fstab and the rw boot argument take effect."; fi
-    if wants docker; then log "log out and back in for the docker group."; fi
+    if wants docker; then log "docker group: log out and back in, or run 'newgrp docker' in this shell."; fi
     log "re-run any time: $0   (answers in $ANSWERS)"
 }
 
