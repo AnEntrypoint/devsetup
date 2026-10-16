@@ -357,6 +357,7 @@ sudo docker build -t dev-desktop:latest .
   <li>leaves a running sandbox alone and reopens its page</li>
   <li>removes the previous home and clones a fresh one from the template (a btrfs snapshot, so it's instant)</li>
   <li>seeds the sandbox's gh login from the template, if the sandbox doesn't have one yet</li>
+  <li>sets a plain solid desktop colour for the sandbox, written into its fresh XFCE config (dev1 blue, dev2 green, dev3 red, dev4 purple; <code>bgcolor.py</code> writes the file)</li>
   <li>binds the web desktop to <code>127.0.0.1</code>, with the password set to the sandbox name by default. Change it for your setup.</li>
   <li>waits for the web desktop to answer, then opens it in the default browser</li>
   <li>logs each run to <code>/data/sandboxes/logs/devN.log</code></li>

@@ -40,6 +40,19 @@ sudo -n chown 1000:1000 "$HOME_DIR"
 echo "$NAME home reset from shared template."
 
 
+# Plain colour desktop per sandbox, written into its fresh home before start
+case "$NAME" in
+    dev1) BG="#1f3d6e" ;;   # blue
+    dev2) BG="#2e6b3a" ;;   # green
+    dev3) BG="#7a2e2e" ;;   # red
+    dev4) BG="#5b3a7a" ;;   # purple
+esac
+XFCONF="$HOME_DIR/.config/xfce4/xfconf/xfce-perchannel-xml"
+sudo -n mkdir -p "$XFCONF"
+sudo -n python3 /data/projects/dev-sandbox/bgcolor.py "$BG" "$XFCONF/xfce4-desktop.xml"
+sudo -n chown -R 1000:1000 "$HOME_DIR/.config"
+echo "$NAME desktop colour $BG"
+
 # Seed the sandbox's gh login from the template when its own folder has none yet
 if [ ! -f "$BASE/$NAME/creds/gh/hosts.yml" ] && [ -f "$TEMPLATE/.config/gh/hosts.yml" ]; then
     sudo -n mkdir -p "$BASE/$NAME/creds/gh"
