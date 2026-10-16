@@ -229,6 +229,12 @@ opencode --version</code></pre>
 
 <div class="warn"><strong>Git-hosted npm packages.</strong> npm 12 refuses git dependencies by default. To allow them in the sandboxes, set <code>allow-git=all</code> in the template's <code>.npmrc</code>. This means packages fetched from git run their install scripts, so only enable it for sources you trust.</div>
 
+<h3>Kaggle CLI</h3>
+<pre><code>UV_TOOL_BIN_DIR=/data/cache/bin UV_TOOL_DIR=/data/cache/uv/tools uv tool install kaggle
+export PATH="/data/cache/bin:$PATH"   # in ~/.bashrc
+kaggle --version</code></pre>
+<p>The binary sits in the shared bin folder, which the sandboxes mount. Each sandbox keeps its own <code>~/.kaggle</code> folder, so the API token (<code>kaggle.json</code>) is never shared. Place it in each sandbox's folder under <code>/data/sandboxes/devN/creds/kaggle</code>, or create it from inside the sandbox.</p>
+
 <h2 id="cli">10. GitHub and Google Cloud CLIs</h2>
 <p>Add the official apt repositories and install <code>gh</code> and <code>google-cloud-cli</code> from them, so updates arrive with the rest of the system.</p>
 <pre><code>sudo install -d -m 0755 /etc/apt/keyrings
