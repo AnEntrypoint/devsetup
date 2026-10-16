@@ -64,6 +64,8 @@
   <li><strong>apt is for the operating system only.</strong> Compilers, libraries and the apt download cache. The download cache is redirected to the data drive.</li>
   <li><strong>Sandboxes share tools, not identity.</strong> Each sandbox runs the same toolchains, read-only where possible. Logins and history are shared only when we decide to share them, and each one is a separate, named decision below.</li>
   <li><strong>Sandbox homes reset on every start.</strong> Each start clones a fresh home from a template. Only the shared workspace and the shared stores survive.</li>
+  <li><strong>Commit with your GitHub no-reply address.</strong> GitHub credits commits by author email. Any other address that is linked to a different GitHub account gets those commits attributed to that account. See section 8 for the exact setting.</li>
+  <li><strong>Use the current Node LTS line.</strong> Odd-numbered and out-of-support releases are not used. Node v24 LTS is the line in use at the time of writing.</li>
 </ul>
 
 <h2 id="layout">2. Disk layout</h2>
@@ -177,7 +179,7 @@ RUSTUP_HOME=/data/cache/rustup CARGO_HOME=/data/cache/cargo \
 sudo ln -sfn /data/cache/go /usr/local/go</code></pre>
 
 <h3>Node</h3>
-<p>Download the LTS tarball from nodejs.org and check it against <code>SHASUMS256.txt</code>:</p>
+<p>Download the latest LTS tarball from nodejs.org, not the newest release, and check it against <code>SHASUMS256.txt</code>. Check the current LTS with <code>curl -fsSL https://nodejs.org/dist/index.json</code>, which marks LTS releases. The host and every sandbox must run the same version. Because the sandboxes mount <code>/data/cache/node</code>, one install covers all of them:</p>
 <pre><code>mkdir -p /data/cache/node &amp;&amp; tar -C /data/cache/node -xJf node-v&lt;version&gt;-linux-x64.tar.xz
 ln -sfn /data/cache/node/node-v&lt;version&gt;-linux-x64 /data/cache/node/current
 mkdir -p ~/.local/bin
@@ -194,6 +196,13 @@ ln -sfn /data/cache/bin/uv  ~/.local/bin/uv
 ln -sfn /data/cache/bin/uvx ~/.local/bin/uvx</code></pre>
 <p>uv manages Python versions under <code>/data/cache/uv/python</code>. Use <code>uv python install</code> for project work rather than the system Python.</p>
 
+<h3>Git identity</h3>
+<p>Set your git author to your GitHub no-reply address. The form is <code>&lt;numeric-id&gt;+&lt;login&gt;@users.noreply.github.com</code>, and the numeric ID comes from <code>gh api user --jq .id</code>. Set it on the host and in the sandbox template, so commits from every sandbox are credited to you:</p>
+<pre><code>git config --global user.name "&lt;login&gt;"
+git config --global user.email "&lt;numeric-id&gt;+&lt;login&gt;@users.noreply.github.com"
+git log --format='%an &lt;%ae&gt;' -1   # check after a commit</code></pre>
+<div class="warn"><strong>Do not use a personal or shared work email as the commit author.</strong> If that address is verified on a different GitHub account, GitHub credits every commit made with it to that account. We hit this on a new system: a commit made with a work email was credited to another user. Changing the identity afterwards means rewriting history.</div>
+
 <h2 id="npm">9. npm, pnpm, bun and Claude Code</h2>
 <p>Send npm's global installs to a writable prefix on the data drive. The Node install itself is read-only in the sandboxes, so user-installed packages need their own prefix:</p>
 <pre><code>npm config set prefix /data/cache/npm-global
@@ -203,6 +212,20 @@ npm config set cache /data/cache/npm</code></pre>
 <pre><code>npm install -g --allow-scripts=pnpm,bun pnpm@latest bun@latest
 npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest</code></pre>
 <p>Claude Code needs its native binary, which comes from its install script, so the <code>--allow-scripts</code> flag matters. Verify with <code>claude --version</code>.</p>
+
+<p>Put the shared npm bin on the host's <code>PATH</code>, so tools installed into the shared prefix run from any shell, including the sandboxes:</p>
+<pre><code>export PATH="/data/cache/npm-global/bin:$PATH"   # in ~/.bashrc</code></pre>
+
+<div class="warn"><strong>Install scripts in npm 12 (what we found).</strong> Some packages, including <code>opencode-ai</code>, stop working with a postinstall error when their script is blocked. We tested the options:
+<ul>
+  <li><code>allow-scripts=all</code> in <code>.npmrc</code> does <strong>not</strong> allow install scripts.</li>
+  <li><code>--allow-scripts=&lt;pkg&gt;</code> works for <strong>global</strong> installs only. Project-scoped installs reject it with <code>EALLOWSCRIPTS</code> and expect an <code>allowScripts</code> entry in <code>package.json</code> or <code>.npmrc</code>.</li>
+  <li><code>npm install-scripts approve &lt;pkg&gt;</code> followed by <code>npm rebuild &lt;pkg&gt;</code> works for a package that is already installed.</li>
+  <li>An <code>npx</code> run uses its own cache under the shared npm cache, and the scripts there stay blocked. Don't rely on <code>npx</code> for packages that need postinstall.</li>
+</ul>
+What we do instead: install such tools globally into the shared prefix, which the sandboxes mount too, and allow the script on that install:</div>
+<pre><code>npm install -g --allow-scripts=opencode-ai opencode-ai
+opencode --version</code></pre>
 
 <div class="warn"><strong>Git-hosted npm packages.</strong> npm 12 refuses git dependencies by default. To allow them in the sandboxes, set <code>allow-git=all</code> in the template's <code>.npmrc</code>. This means packages fetched from git run their install scripts, so only enable it for sources you trust.</div>
 
