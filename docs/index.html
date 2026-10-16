@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devsetup: building a dev machine</title>
+<style>
+  :root { --bg:#fbfbfa; --fg:#1d1d1f; --muted:#5b5b60; --line:#e3e3e0; --code:#f2f2ef; --accent:#2a6df4; --warn:#b26a00; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#141416; --fg:#e8e8ea; --muted:#9a9aa2; --line:#2a2a2e; --code:#1d1d21; --accent:#7aa7ff; --warn:#f0b35a; }
+  }
+  :root[data-theme="dark"] { --bg:#141416; --fg:#e8e8ea; --muted:#9a9aa2; --line:#2a2a2e; --code:#1d1d21; --accent:#7aa7ff; --warn:#f0b35a; }
+  body { background:var(--bg); color:var(--fg); font:16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; margin:0; }
+  main { max-width:860px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:2rem; margin:.4em 0 .2em; }
+  h2 { font-size:1.35rem; margin-top:2.2em; border-bottom:1px solid var(--line); padding-bottom:.25em; }
+  h3 { font-size:1.05rem; margin-top:1.6em; }
+  p.lead { color:var(--muted); margin-top:0; }
+  a { color:var(--accent); }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.9em; }
+  code { background:var(--code); padding:.1em .35em; border-radius:4px; }
+  pre { background:var(--code); padding:12px 14px; border-radius:6px; overflow-x:auto; border:1px solid var(--line); }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; margin:1em 0; font-size:.95em; }
+  th, td { border:1px solid var(--line); padding:6px 10px; text-align:left; vertical-align:top; }
+  th { background:var(--code); }
+  .note { border-left:3px solid var(--accent); padding:.4em .9em; background:var(--code); border-radius:0 6px 6px 0; margin:1em 0; }
+  .warn { border-left:3px solid var(--warn); padding:.4em .9em; background:var(--code); border-radius:0 6px 6px 0; margin:1em 0; }
+  nav ol { padding-left:1.2em; columns:2; }
+  @media (max-width:640px) { nav ol { columns:1; } }
+</style>
+</head>
+<body>
+<main>
+<h1>Building a dev machine</h1>
+<p class="lead">How we set up our dev machines: one btrfs data drive for everything installed on purpose, shared toolchains, and sandboxed desktops that share tools and credentials only where we chose to. Follow it top to bottom on a fresh Ubuntu install. Placeholders are in <code>&lt;angle brackets&gt;</code>.</p>
+
+<nav>
+<ol>
+  <li><a href="#principles">Principles</a></li>
+  <li><a href="#layout">Disk layout</a></li>
+  <li><a href="#install">Install Ubuntu</a></li>
+  <li><a href="#btrfs">btrfs subvolumes and mounts</a></li>
+  <li><a href="#boot">Boot: root must be read-write</a></li>
+  <li><a href="#sudo">Passwordless sudo (optional)</a></li>
+  <li><a href="#env">System-wide defaults</a></li>
+  <li><a href="#tools">Toolchains</a></li>
+  <li><a href="#npm">npm, pnpm, bun and Claude Code</a></li>
+  <li><a href="#cli">GitHub and Google Cloud CLIs</a></li>
+  <li><a href="#gm">gm (shared install)</a></li>
+  <li><a href="#docker">Docker on the data drive</a></li>
+  <li><a href="#flatpak">Desktop apps (flatpak)</a></li>
+  <li><a href="#dedup">Deduplication</a></li>
+  <li><a href="#sandboxes">Sandboxed desktops</a></li>
+  <li><a href="#shared">What is shared, and what is not</a></li>
+  <li><a href="#maintenance">Maintenance</a></li>
+  <li><a href="#gaps">Known gaps</a></li>
+</ol>
+</nav>
+
+<h2 id="principles">1. Principles</h2>
+<ul>
+  <li><strong>Everything installed on purpose goes to the btrfs data drive.</strong> Standalone tools go under <code>/data/cache</code>, projects under <code>/data/projects</code>, desktop apps through flatpak on <code>/data/flatpak</code>, and Docker under <code>/data/docker</code>. Block deduplication then covers all of it.</li>
+  <li><strong>apt is for the operating system only.</strong> Compilers, libraries and the apt download cache. The download cache is redirected to the data drive.</li>
+  <li><strong>Sandboxes share tools, not identity.</strong> Each sandbox runs the same toolchains, read-only where possible. Logins and history are shared only when we decide to share them, and each one is a separate, named decision below.</li>
+  <li><strong>Sandbox homes reset on every start.</strong> Each start clones a fresh home from a template. Only the shared workspace and the shared stores survive.</li>
+</ul>
+
+<h2 id="layout">2. Disk layout</h2>
+<p>Two drives. The system drive holds the OS, and the data drive is one btrfs partition with a subvolume per area.</p>
+<table>
+  <tr><th>Partition</th><th>Size</th><th>Filesystem</th><th>Mount</th><th>Contents</th></tr>
+  <tr><td>System 1</td><td>1 GiB</td><td>FAT32</td><td><code>/boot/efi</code></td><td>Bootloader</td></tr>
+  <tr><td>System 2</td><td>200 GiB</td><td>ext4</td><td><code>/</code></td><td>Ubuntu, apt packages, snaps</td></tr>
+  <tr><td>Data</td><td>Rest (about 730 GiB)</td><td>btrfs</td><td><code>/data/*</code> subvolumes</td><td>Everything else</td></tr>
+</table>
+<p class="note">Keep about 15% of the btrfs partition free. Drive vendors count in GB, so a "1 TB" drive shows as about 931 GiB. If Windows shares the disk, give it its own NTFS partition before partitioning.</p>
+
+<h2 id="install">3. Install Ubuntu</h2>
+<p>In the installer's manual partitioning, create the three partitions above and leave the data partition unformatted. Format it in the next step. Use UUIDs everywhere: device names such as <code>nvme0n1</code> and <code>nvme1n1</code> can swap between boots.</p>
+
+<h2 id="btrfs">4. btrfs subvolumes and mounts</h2>
+<p>Create the filesystem and one subvolume per area:</p>
+<pre><code>sudo mkfs.btrfs -L data /dev/&lt;data-partition&gt;
+sudo mkdir -p /mnt/btrfs-root
+sudo mount -o subvolid=5 UUID=&lt;uuid&gt; /mnt/btrfs-root
+for sv in @projects @cache @models @docker @tmp @sandboxes @workspace; do
+  sudo btrfs subvolume create /mnt/btrfs-root/$sv
+done
+sudo umount /mnt/btrfs-root</code></pre>
+
+<table>
+  <tr><th>Subvolume</th><th>Mount</th><th>Purpose</th><th>Compression</th></tr>
+  <tr><td><code>@projects</code></td><td><code>/data/projects</code></td><td>Repos and code</td><td>zstd:3</td></tr>
+  <tr><td><code>@cache</code></td><td><code>/data/cache</code></td><td>Toolchains, package caches, shared tools (see below)</td><td>zstd:3</td></tr>
+  <tr><td><code>@models</code></td><td><code>/data/models</code></td><td>Model weights</td><td>off (set per subvolume)</td></tr>
+  <tr><td><code>@docker</code></td><td><code>/data/docker</code></td><td>Docker data root</td><td>zstd:3</td></tr>
+  <tr><td><code>@tmp</code></td><td><code>/data/tmp</code> and <code>/tmp</code></td><td>Temporary files</td><td>zstd:3</td></tr>
+  <tr><td><code>@sandboxes</code></td><td><code>/data/sandboxes</code></td><td>Sandbox homes, template, shared stores, logs</td><td>zstd:3</td></tr>
+  <tr><td><code>@workspace</code></td><td><code>/data/workspace</code></td><td>The shared coding workspace mounted into sandboxes</td><td>zstd:3</td></tr>
+</table>
+
+<p>Add to <code>/etc/fstab</code>, replacing <code>&lt;uuid&gt;</code> with the value from <code>blkid</code>:</p>
+<pre><code>UUID=&lt;uuid&gt;  /data/projects    btrfs  subvol=@projects,compress=zstd:3,noatime  0 0
+UUID=&lt;uuid&gt;  /data/cache       btrfs  subvol=@cache,compress=zstd:3,noatime     0 0
+UUID=&lt;uuid&gt;  /data/models      btrfs  subvol=@models,noatime                    0 0
+UUID=&lt;uuid&gt;  /data/docker      btrfs  subvol=@docker,compress=zstd:3,noatime    0 0
+UUID=&lt;uuid&gt;  /data/tmp         btrfs  subvol=@tmp,compress=zstd:3,noatime       0 0
+UUID=&lt;uuid&gt;  /tmp             btrfs  subvol=@tmp,compress=zstd:3,noatime       0 0
+UUID=&lt;uuid&gt;  /data/sandboxes   btrfs  subvol=@sandboxes,compress=zstd:3,noatime 0 0
+UUID=&lt;uuid&gt;  /data/workspace   btrfs  subvol=@workspace,compress=zstd:3,noatime 0 0</code></pre>
+
+<p>Create the mount points, mount everything, and give your user ownership:</p>
+<pre><code>sudo mkdir -p /data/{projects,cache,models,docker,tmp,sandboxes,workspace}
+sudo systemctl daemon-reload &amp;&amp; sudo mount -a
+sudo chown -R $USER:$USER /data/{projects,cache,models,sandboxes,workspace}
+sudo chmod 1777 /data/tmp</code></pre>
+
+<div class="warn"><strong>Do not mask <code>tmp.mount</code>.</strong> Masking it also blocks the fstab entry for <code>/tmp</code>, which leaves <code>/tmp</code> in RAM. Leave it unmasked and let fstab mount <code>/tmp</code> from <code>@tmp</code> at boot. Mounting it on a running system hides the files already in <code>/tmp</code>, so do that step at reboot.</div>
+
+<p>Turn compression off for model weights:</p>
+<pre><code>sudo btrfs property set /data/models compression no
+btrfs property get /data/models compression   # expect: compression=no</code></pre>
+
+<div class="note"><strong>Home directory on btrfs (planned, not yet done):</strong> move <code>/home/&lt;user&gt;</code> into an <code>@dev</code> subvolume, so browser profiles and dotfiles are deduplicated too. Copy it while the desktop is idle, add a fstab mount at <code>/home/&lt;user&gt;</code> with <code>subvol=@dev</code>, and reboot. The old copy on the system drive can be removed afterwards.</div>
+
+<h2 id="boot">5. Boot: root must be read-write</h2>
+<p>On one machine the root filesystem came up read-only after a reboot. systemd's remount step didn't run, so Docker failed, the display manager restarted in a loop, and the data mounts didn't come up. Manually remounting root made the desktop usable again, but the boot fix is a kernel argument.</p>
+<pre><code># /etc/default/grub
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash rw"
+
+sudo update-grub
+grep -m1 "linux " /boot/grub/grub.cfg    # the line should end with: rw</code></pre>
+<p>The kernel takes the last of <code>ro</code> and <code>rw</code>, so <code>rw</code> wins. Remove any leftover installer arguments such as <code>autoinstall</code> from this line. After a reboot, check with <code>findmnt -n -o OPTIONS /</code>, which should start with <code>rw</code>.</p>
+
+<h2 id="sudo">6. Passwordless sudo (optional)</h2>
+<p>This is a convenience for a single-user workstation. Anything running as your user can then become root without a password.</p>
+<pre><code>echo "$USER ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/90-$USER-nopasswd
+sudo chmod 0440 /etc/sudoers.d/90-$USER-nopasswd
+sudo visudo -c</code></pre>
+
+<h2 id="env">7. System-wide defaults</h2>
+<p>Put the tool locations in <code>/etc/environment</code>, so every session (including desktop apps) sees them:</p>
+<pre><code>sudo tee -a /etc/environment &lt;&lt;'EOF'
+TMPDIR=/data/tmp
+RUSTUP_HOME=/data/cache/rustup
+CARGO_HOME=/data/cache/cargo
+GOPATH=/data/projects/go
+GOCACHE=/data/cache/go-build
+GOMODCACHE=/data/cache/go-mod
+UV_CACHE_DIR=/data/cache/uv
+UV_PYTHON_INSTALL_DIR=/data/cache/uv/python
+NPM_CONFIG_CACHE=/data/cache/npm
+EOF</code></pre>
+<p>Redirect the apt download cache to the data drive:</p>
+<pre><code>mkdir -p /data/cache/apt/archives/partial
+sudo rm -rf /var/cache/apt/archives
+sudo ln -s /data/cache/apt/archives /var/cache/apt/archives</code></pre>
+<p class="note">Login shells read <code>/etc/profile.d</code>, but some desktop sessions don't. If a desktop menu doesn't show flatpak apps, link their desktop entries into <code>~/.local/share/applications</code>, which every session searches.</p>
+
+<h2 id="tools">8. Toolchains</h2>
+<p>Standalone tools live under <code>/data/cache</code> and are linked into <code>~/.local/bin</code>. Install apt packages only for system libraries and compilers.</p>
+
+<h3>System packages (apt)</h3>
+<pre><code>sudo apt-get install -y build-essential cmake ninja-build pkg-config \
+  libssl-dev libffi-dev zlib1g-dev libsqlite3-dev unzip jq duperemove git</code></pre>
+
+<h3>Rust</h3>
+<pre><code>curl -fsSLO https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init
+chmod +x rustup-init
+RUSTUP_HOME=/data/cache/rustup CARGO_HOME=/data/cache/cargo \
+  ./rustup-init -y --no-modify-path --default-toolchain stable</code></pre>
+
+<h3>Go</h3>
+<p>Download the tarball from go.dev, check its SHA-256 against the value on the download page, then:</p>
+<pre><code>sudo tar -C /data/cache -xzf go&lt;version&gt;.linux-amd64.tar.gz   # creates /data/cache/go
+sudo ln -sfn /data/cache/go /usr/local/go</code></pre>
+
+<h3>Node</h3>
+<p>Download the LTS tarball from nodejs.org and check it against <code>SHASUMS256.txt</code>:</p>
+<pre><code>mkdir -p /data/cache/node &amp;&amp; tar -C /data/cache/node -xJf node-v&lt;version&gt;-linux-x64.tar.xz
+ln -sfn /data/cache/node/node-v&lt;version&gt;-linux-x64 /data/cache/node/current
+mkdir -p ~/.local/bin
+ln -sfn /data/cache/node/current/bin/node ~/.local/bin/node
+ln -sfn /data/cache/node/current/bin/npm  ~/.local/bin/npm
+ln -sfn /data/cache/node/current/bin/npx  ~/.local/bin/npx</code></pre>
+
+<h3>uv</h3>
+<p>Install the standalone release binary and check its <code>.sha256</code> file. Keep it in the shared tools folder, which the sandboxes mount too:</p>
+<pre><code>mkdir -p /data/cache/bin
+# download uv-x86_64-unknown-linux-gnu.tar.gz from github.com/astral-sh/uv/releases and verify it
+install -m 0755 uv uvx /data/cache/bin/
+ln -sfn /data/cache/bin/uv  ~/.local/bin/uv
+ln -sfn /data/cache/bin/uvx ~/.local/bin/uvx</code></pre>
+<p>uv manages Python versions under <code>/data/cache/uv/python</code>. Use <code>uv python install</code> for project work rather than the system Python.</p>
+
+<h2 id="npm">9. npm, pnpm, bun and Claude Code</h2>
+<p>Send npm's global installs to a writable prefix on the data drive. The Node install itself is read-only in the sandboxes, so user-installed packages need their own prefix:</p>
+<pre><code>npm config set prefix /data/cache/npm-global
+npm config set cache /data/cache/npm</code></pre>
+
+<p>npm blocks install scripts by default, and some packages need theirs. Allow them per package rather than globally:</p>
+<pre><code>npm install -g --allow-scripts=pnpm,bun pnpm@latest bun@latest
+npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest</code></pre>
+<p>Claude Code needs its native binary, which comes from its install script, so the <code>--allow-scripts</code> flag matters. Verify with <code>claude --version</code>.</p>
+
+<div class="warn"><strong>Git-hosted npm packages.</strong> npm 12 refuses git dependencies by default. To allow them in the sandboxes, set <code>allow-git=all</code> in the template's <code>.npmrc</code>. This means packages fetched from git run their install scripts, so only enable it for sources you trust.</div>
+
+<h2 id="cli">10. GitHub and Google Cloud CLIs</h2>
+<p>Add the official apt repositories and install <code>gh</code> and <code>google-cloud-cli</code> from them, so updates arrive with the rest of the system.</p>
+<pre><code>sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg &gt;/dev/null
+echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list
+curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/cloud.google.gpg
+echo "deb [signed-by=/etc/apt/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+sudo apt-get update &amp;&amp; sudo apt-get install -y gh google-cloud-cli</code></pre>
+
+<p><strong>Shared gcloud:</strong> the SDK is copied from the apt install to <code>/data/cache/google-cloud-sdk</code>, and the sandboxes mount it read-only, ahead of the image's own copy on <code>PATH</code>. The copy doesn't follow apt upgrades, so refresh it after upgrading gcloud on the host:</p>
+<pre><code>sudo rm -rf /data/cache/google-cloud-sdk
+sudo cp -a /usr/lib/google-cloud-sdk /data/cache/google-cloud-sdk
+sudo chown -R root:root /data/cache/google-cloud-sdk</code></pre>
+
+<p class="note">Logins are never copied between machines. Run <code>gh auth login</code> and <code>gcloud auth login</code> on each machine, and in each sandbox that needs them (see section 12 for how sandbox logins persist).</p>
+
+<h2 id="gm">11. gm (shared install)</h2>
+<p>gm installs its self-updating MCP bundle into <code>$HOME/.gm-tools</code>. To share one bundle across the sandboxes, install it with <code>HOME</code> pointed at the shared folder:</p>
+<pre><code>mkdir -p /data/cache/gm/.gm-tools /data/cache/npm-global
+cd /data/cache/gm
+HOME=/data/cache/gm npm install -g --prefix /data/cache/npm-global --allow-git=all github:AnEntrypoint/gm
+HOME=/data/cache/gm /data/cache/npm-global/bin/gm -g</code></pre>
+<p>The template links <code>~/.gm-tools</code> to <code>/data/cache/gm/.gm-tools</code>, so a single self-update serves every sandbox. The installer also registers the MCP server and copies its skills, which the template carries.</p>
+
+<div class="warn"><strong>Known side effects of the installer</strong>, which we found after the fact. It writes a <code>gm</code> context server into <code>~/.config/zed/settings.json</code> on the host, with the path hard-coded to <code>/home/&lt;user&gt;</code>. It also starts an <code>agentplug-runner</code> daemon from the shared folder. After the install, check for both, and remove the Zed entry and stop the daemon if you don't want them on the host.</div>
+
+<h2 id="docker">12. Docker on the data drive</h2>
+<pre><code>sudo apt-get install -y docker.io docker-compose-v2
+sudo systemctl stop docker
+sudo tee /etc/docker/daemon.json &gt;/dev/null &lt;&lt;'EOF'
+{ "data-root": "/data/docker" }
+EOF
+sudo systemctl start docker
+sudo usermod -aG docker $USER   # takes effect at next login
+sudo docker run --rm hello-world</code></pre>
+<p class="note">Restarting Docker stops every running container, including the sandboxes. Docker's overlay storage on btrfs works here, but it isn't the combination Docker's docs recommend. If you see storage errors, move <code>data-root</code> back to the default.</p>
+
+<h2 id="flatpak">13. Desktop apps (flatpak)</h2>
+<p>Desktop apps go through flatpak, and its system installation is symlinked onto the data drive, so new installs land there by default:</p>
+<pre><code>sudo apt-get install -y flatpak
+sudo mkdir -p /data/flatpak
+sudo mv /var/lib/flatpak/* /data/flatpak/ 2&gt;/dev/null; sudo rmdir /var/lib/flatpak 2&gt;/dev/null || true
+sudo ln -sfn /data/flatpak /var/lib/flatpak
+sudo flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+sudo flatpak install -y --system flathub com.obsproject.Studio</code></pre>
+<p>Desktop menus may not see the exported launchers straight away. Link them into your own applications folder:</p>
+<pre><code>mkdir -p ~/.local/share/applications
+for f in /data/flatpak/exports/share/applications/*.desktop; do ln -sfn "$f" ~/.local/share/applications/; done
+update-desktop-database ~/.local/share/applications</code></pre>
+
+<p><strong>Snap cannot be relocated.</strong> Snapd keeps its store at <code>/var/lib/snapd</code> and <code>/snap</code> on the system drive. Prefer flatpak for new desktop apps. Existing snaps keep their profiles under the home directory.</p>
+
+<h3>Discord screen sharing</h3>
+<p>The Discord snap crashed when screen sharing on X11. The Flathub build (<code>com.discordapp.Discord</code>) installs from the same remote, and we run it instead. The snap's logs showed seccomp denials for <code>io_uring_setup</code>, which is a likely cause, but we didn't confirm that it's the crash.</p>
+
+<h2 id="dedup">14. Deduplication</h2>
+<p>btrfs compresses but does not deduplicate on its own. We use <code>duperemove</code> in non-destructive mode. It replaces identical blocks with shared copies and removes no files. It runs weekly:</p>
+<pre><code># /etc/systemd/system/dedup-data.service
+[Unit]
+Description=Non-destructive btrfs dedup (shared extents) for /data
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+ExecStart=/usr/bin/duperemove -r -d --hashfile=/data/cache/duperemove.db --io-threads=4 --cpu-threads=8 /data/projects /data/models /data/cache
+
+# /etc/systemd/system/dedup-data.timer
+[Unit]
+Description=Weekly dedup of /data
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00
+Persistent=true
+[Install]
+WantedBy=timers.target</code></pre>
+<pre><code>sudo systemctl daemon-reload
+sudo systemctl enable --now dedup-data.timer</code></pre>
+
+<h2 id="sandboxes">15. Sandboxed desktops</h2>
+<p>Each sandbox is a <a href="https://github.com/linuxserver/docker-webtop">webtop</a> XFCE desktop running in Docker. It's reachable only from this machine, at <code>127.0.0.1</code> on ports 3001 to 3004. The image is built from <code>sandbox/Dockerfile</code> on <code>lscr.io/linuxserver/webtop:ubuntu-xfce</code>, and it adds the apt packages we use (build tools, gh and the gcloud apt package as a fallback).</p>
+
+<h3>Shared template</h3>
+<p><code>/data/sandboxes/shared-home</code> is a btrfs subvolume that every sandbox clones from on start. It holds:</p>
+<ul>
+  <li><code>.profile</code> and <code>.bashrc</code>: the toolchain environment, matching the host shell</li>
+  <li><code>.gitconfig</code>: your git name and email, and a credential helper that sends GitHub URLs through <code>gh</code></li>
+  <li><code>.npmrc</code>: <code>allow-git</code> and the shared npm prefix</li>
+  <li><code>.gm-tools</code>: a symlink to the shared gm bundle</li>
+  <li><code>.claude/</code>: settings, skills and plugins; symlinks for the shared login and shared projects and history; and <code>.claude.json</code> with the gm MCP registration and the account record</li>
+  <li><code>.config/gh/hosts.yml</code>: a GitHub login (see the warning below)</li>
+</ul>
+
+<div class="warn"><strong>The template contains a GitHub login.</strong> We chose to copy our gh login into the template, so every sandbox starts signed in. Anything running in a sandbox can use that token. Prefer a fine-grained token limited to the repositories the sandboxes need, and replace the copy in the template with it.</div>
+
+<p>Set up the template once:</p>
+<pre><code>sudo btrfs subvolume create /data/sandboxes/shared-home
+sudo chown 1000:1000 /data/sandboxes/shared-home
+# write .profile, .bashrc and .gitconfig, then the .claude and .npmrc links described above</code></pre>
+
+<h3>Image and launcher</h3>
+<pre><code>cd sandbox
+sudo docker build -t dev-desktop:latest .
+./launch.sh dev1     # starts it and opens http://127.0.0.1:3001 in the default browser
+./stop.sh dev1</code></pre>
+<p><code>launch.sh</code> does this on every start:</p>
+<ul>
+  <li>leaves a running sandbox alone and reopens its page</li>
+  <li>removes the previous home and clones a fresh one from the template (a btrfs snapshot, so it's instant)</li>
+  <li>seeds the sandbox's gh login from the template, if the sandbox doesn't have one yet</li>
+  <li>binds the web desktop to <code>127.0.0.1</code>, with the password set to the sandbox name by default. Change it for your setup.</li>
+  <li>waits for the web desktop to answer, then opens it in the default browser</li>
+  <li>logs each run to <code>/data/sandboxes/logs/devN.log</code></li>
+</ul>
+
+<h3>Desktop icons</h3>
+<p>For each sandbox, make a Start icon that runs <code>launch.sh devN</code> with <code>Terminal=false</code>, and a Stop icon that runs <code>stop.sh devN</code>. Mark them trusted with <code>gio set &lt;file&gt; metadata::trusted true</code>. The Start icon needs no terminal, because the launcher opens the browser itself.</p>
+
+<h3>Per-sandbox state</h3>
+<p>Each sandbox keeps its own gh and gcloud folders under <code>/data/sandboxes/devN/creds</code>. They're mounted into the sandbox, so they survive the home reset. A sandbox's gh login is seeded from the template on its first start. gcloud still needs <code>gcloud auth login</code> in each sandbox.</p>
+
+<h2 id="shared">16. What is shared, and what is not</h2>
+<table>
+  <tr><th>Item</th><th>How it's shared</th><th>Access</th></tr>
+  <tr><td>Toolchains (Go, Node, Rust, uv, cargo registry)</td><td><code>/data/cache/*</code> mounted into each sandbox</td><td>Read-only, except caches</td></tr>
+  <tr><td>Shared CLI tools (npm global prefix, gcloud SDK)</td><td><code>/data/cache/npm-global</code> and <code>/data/cache/google-cloud-sdk</code></td><td>npm prefix read-write, gcloud read-only</td></tr>
+  <tr><td>Workspace</td><td><code>/data/workspace</code> mounted as <code>/workspace</code></td><td>Read-write</td></tr>
+  <tr><td>Projects</td><td><code>/data/projects</code> mounted as <code>/data/projects</code></td><td>Read-write</td></tr>
+  <tr><td>Claude login</td><td><code>/data/cache/claude-auth</code>, linked from the template</td><td>Read-write, so token refreshes reach every sandbox</td></tr>
+  <tr><td>Claude projects and history</td><td><code>/data/cache/claude-state</code>, linked from the template</td><td>Read-write. Starts empty. Shared between sandboxes, not copied from the host.</td></tr>
+  <tr><td>gm bundle</td><td><code>/data/cache/gm</code></td><td>Read-write, so one self-update serves all sandboxes</td></tr>
+  <tr><td>GitHub login</td><td>Copied into the template, seeded per sandbox</td><td>Read-write per sandbox</td></tr>
+  <tr><td>Host home, browser profiles, host keyring</td><td>Not mounted</td><td>Never</td></tr>
+  <tr><td>Docker socket, X11, Wayland and D-Bus sockets</td><td>Not mounted</td><td>Never</td></tr>
+</table>
+<p>The sandboxes run with all capabilities dropped except the few the desktop needs, with <code>no-new-privileges</code>, a memory cap and a process limit. The web desktop listens only on <code>127.0.0.1</code>.</p>
+
+<h2 id="maintenance">17. Maintenance</h2>
+<ul>
+  <li><strong>Claude login:</strong> log in on the host with <code>claude</code> once. <code>~/.claude/.credentials.json</code> is a symlink into <code>/data/cache/claude-auth</code>, so every sandbox picks it up.</li>
+  <li><strong>gm:</strong> the bundle updates itself. To reinstall, repeat section 11.</li>
+  <li><strong>gcloud:</strong> refresh the shared SDK after upgrading on the host (section 10).</li>
+  <li><strong>Template:</strong> edits apply to sandboxes on their next start, since every start clones the template again.</li>
+  <li><strong>Windows partition:</strong> it's mounted read-only and by hand, not from fstab. Mount it with <code>-o ro</code> and leave it read-only, so Windows' hibernation or fast startup can't corrupt it.</li>
+  <li><strong>Checks:</strong> <code>findmnt -t btrfs</code> should list every data path, <code>systemctl --failed</code> should be empty, and <code>findmnt -n -o OPTIONS /</code> should start with <code>rw</code>.</li>
+</ul>
+
+<h2 id="gaps">18. Known gaps</h2>
+<ul>
+  <li><strong>apt packages</strong> under <code>/usr</code> (compilers, libraries) stay on the system drive. Only the download cache has moved.</li>
+  <li><strong>snap</strong> stays on the system drive, because its store can't be relocated safely.</li>
+  <li><strong>The home directory</strong> is still on the system drive. The btrfs move is planned, not done.</li>
+  <li><strong>The gcloud SDK</strong> in <code>/data/cache</code> is a copy, so it doesn't follow apt upgrades.</li>
+  <li><strong>The sandbox GitHub login</strong> is a copied token. Replace it with a fine-grained token (section 15).</li>
+  <li><strong>Shared Claude login and history</strong> mean one account is used by every sandbox, and token refreshes and session records are shared as well.</li>
+</ul>
+</main>
+</body>
+</html>
