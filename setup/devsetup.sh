@@ -6,9 +6,11 @@
 #
 # Usage:
 #   ./setup/devsetup.sh                     interactive menus (whiptail when available)
-#   ./setup/devsetup.sh --dry-run           print every action, change nothing
+#   ./setup/devsetup.sh --collect-only      answer every question, save the collection, change nothing
+#   ./setup/devsetup.sh --dry-run           answer, then print every action, change nothing
 #   ./setup/devsetup.sh --answers FILE      run from a saved answers file, without prompts
 #   ./setup/devsetup.sh --install-launcher  add a desktop icon for the menus
+#   DEVSETUP_UI=none ./setup/devsetup.sh   force a backend: whiptail or none (defaults)
 #   ./setup/devsetup.sh --help
 #
 # Answers are saved to ~/.config/devsetup/answers.env, so a run can be repeated.
@@ -22,9 +24,13 @@ ANSWERS="$STATE_DIR/answers.env"
 LOG_DIR="$HOME/.local/state/devsetup"
 LOG="$LOG_DIR/run-$(date +%Y%m%d-%H%M%S).log"
 DRY=0
+COLLECT=0
+COLLECT_ONLY=0
 ANSWERS_IN=""
+# Terminal menus only: whiptail on a terminal, plain prompts otherwise.
+# DEVSETUP_UI=whiptail|none forces a backend (used for tests and scripted runs).
 UI=none
-if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v zenity >/dev/null 2>&1; then UI=zenity
+if [ -n "${DEVSETUP_UI:-}" ]; then UI="$DEVSETUP_UI"
 elif [ -t 0 ] && command -v whiptail >/dev/null 2>&1; then UI=whiptail; fi
 SUDO=""
 [ "$(id -u)" -ne 0 ] && SUDO="sudo"
@@ -56,12 +62,13 @@ MODULE_LABELS=(
 
 usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 
-log() { printf '%s\n' "$*" | tee -a "$LOG" >&2; }
+log() { printf '%s\n' "$*" >>"$LOG"; [ "$COLLECT" = 1 ] || printf '%s\n' "$*" >&2; }
+plan() { printf '  + %s\n' "$*" >>"$LOG"; [ "$COLLECT" = 1 ] || printf '  + %s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
 # Run a command, or print it in dry-run mode.
 run() {
-    if [ "$DRY" = 1 ]; then printf '  + %s\n' "$*" | tee -a "$LOG" >&2; return 0; fi
+    if [ "$DRY" = 1 ]; then plan "$*"; return 0; fi
     printf '  $ %s\n' "$*" >>"$LOG"
     "$@" 2>&1 | tee -a "$LOG" >&2
     return "${PIPESTATUS[0]}"
@@ -71,7 +78,7 @@ run() {
 put() {
     local path="$1" who="${2:-}"
     if [ "$DRY" = 1 ]; then
-        printf '  + write %s\n' "$path" | tee -a "$LOG" >&2
+        plan "write $path"
         cat >/dev/null
         return 0
     fi
@@ -104,7 +111,7 @@ else:
 open(path, "w").write(text)
 PY
     if [ "$DRY" = 1 ]; then
-        printf '  + managed block %s in %s\n' "$id" "$file" | tee -a "$LOG" >&2
+        plan "managed block $id in $file"
     else
         if [ "$who" = sudo ] && [ -n "$SUDO" ]; then $SUDO cp "$tmp" "$file"; else cp "$tmp" "$file"; fi
         printf '  updated block %s in %s\n' "$id" "$file" >>"$LOG"
@@ -132,7 +139,8 @@ set_answer() {
         grep -v "^${key}=" "$ANSWERS" >"$ANSWERS.tmp" || true
         mv "$ANSWERS.tmp" "$ANSWERS"
     fi
-    printf '%s=%q\n' "$key" "$value" >>"$ANSWERS"
+    local esc="${value//\\/\\\\}"; esc="${esc//\"/\\\"}"; esc="${esc//\$/\\\$}"; esc="${esc//\`/\\\`}"
+    printf '%s="%s"\n' "$key" "$esc" >>"$ANSWERS"
     printf -v "$key" '%s' "$value"
     export "$key"
 }
@@ -140,46 +148,27 @@ set_answer() {
 # Dialog backends. Each returns the answer on stdout (or 0/1 for yes/no).
 ui_yesno() { # text default(on|off)
     case "$UI" in
-        zenity) zenity --question --title="devsetup" --text="$1" --width=460 ;;
         whiptail) local f=""; [ "$2" = on ] || f="--defaultno"
                   whiptail --title "devsetup" $f --yesno "$1" 14 76 ;;
     esac
 }
 ui_input() { # text default
     case "$UI" in
-        zenity) zenity --entry --title="devsetup" --text="$1" --entry-text="$2" --width=460 ;;
         whiptail) whiptail --title "devsetup" --inputbox "$1" 12 76 "$2" 3>&1 1>&2 2>&3 ;;
     esac
 }
 ui_radio() { # text default-tag "tag|label" ...
     local text="$1" def="$2"; shift 2
     case "$UI" in
-        zenity)
-            local args=() item
-            for item in "$@"; do
-                local tag="${item%%|*}" label="${item#*|}"
-                if [ "$tag" = "$def" ]; then args+=(TRUE "$tag" "$label"); else args+=(FALSE "$tag" "$label"); fi
-            done
-            zenity --list --radiolist --title="devsetup" --text="$text" --width=520 --height=420 \
-                --column=Pick --column=Key --column=Item --hide-column=2 --print-column=2 "${args[@]}" ;;
         whiptail)
             local items=() item
             for item in "$@"; do items+=("${item%%|*}" "${item#*|}"); done
-            whiptail --title "devsetup" --menu "$text" 20 78 10 "${items[@]}" 3>&1 1>&2 2>&3 ;;
+            whiptail --title "devsetup" --default-item "$def" --menu "$text" 20 78 10 "${items[@]}" 3>&1 1>&2 2>&3 ;;
     esac
 }
 ui_checklist() { # text "tag|label|on|off" ...  -> prints selected tags, space-separated
     local text="$1"; shift
     case "$UI" in
-        zenity)
-            local args=() item tag label st
-            for item in "$@"; do
-                IFS='|' read -r tag label st <<<"$item"
-                if [ "$st" = on ]; then args+=(TRUE "$tag" "$label"); else args+=(FALSE "$tag" "$label"); fi
-            done
-            zenity --list --checklist --title="devsetup" --text="$text" --width=640 --height=560 \
-                --column=Pick --column=Key --column=Item --hide-column=2 --print-column=2 \
-                --separator=' ' "${args[@]}" ;;
         whiptail)
             local items=() item
             for item in "$@"; do
@@ -258,8 +247,8 @@ preflight() {
     log "== preflight"
     [ -r /etc/os-release ] && . /etc/os-release || true
     case "${ID:-}" in ubuntu|debian) ;; *) log "warning: tested on Ubuntu; continuing on ${ID:-unknown}" ;; esac
-    if [ -n "$SUDO" ]; then
-        if [ "$DRY" = 1 ]; then log "dry-run: skipping sudo check"; else $SUDO -v || die "sudo is needed"; fi
+    if [ -n "$SUDO" ] && [ "$DRY" != 1 ] && [ "$COLLECT_ONLY" != 1 ]; then
+        $SUDO -v || die "sudo is needed for a real run"
     fi
     command -v python3 >/dev/null || die "python3 is needed"
     command -v curl >/dev/null || die "curl is needed (sudo apt-get install curl)"
@@ -283,18 +272,17 @@ mod_storage() {
         local confirm; confirm="$(ask_input FORMAT_CONFIRM "Type exactly: ERASE $dev" "")"
         [ "$confirm" = "ERASE $dev" ] || die "confirmation did not match; nothing was erased"
         run $SUDO mkfs.btrfs -f -L data "$dev"
+        if [ "$DRY" = 1 ]; then uuid="<uuid of $dev after format>"
+        else uuid="$($SUDO blkid -s UUID -o value "$dev")"; set_answer DATA_UUID "$uuid"; fi
     else
         local options=() line name fs size id
         while read -r name fs size id; do
             [ -n "$name" ] && [ "$fs" = btrfs ] && options+=("$id|$name $size")
         done < <(lsblk -pn -l -o NAME,FSTYPE,SIZE,UUID || true)
         [ "${#options[@]}" -gt 0 ] || die "no btrfs partition found; choose the format option or create one first"
-        uuid="$(ask_menu DATA_UUID "btrfs partition to use as the data drive:" "" "${options[@]}")"
+        uuid="$(ask_menu DATA_UUID "btrfs partition to use as the data drive:" "${options[0]%%|*}" "${options[@]}")"
     fi
-    if [ -z "$uuid" ]; then
-        uuid="$($SUDO blkid -s UUID -o value "$dev")"
-    fi
-    set_answer DATA_UUID "$uuid"
+    [ -n "$uuid" ] || die "no data partition selected"
 
     # Subvolumes, created from the top level.
     local top=/mnt/devsetup-top subs="@projects @cache @models @docker @tmp @sandboxes @workspace"
@@ -334,7 +322,7 @@ mod_storage() {
     run $SUDO mount -a
     run $SUDO chown -R "$(id -u):$(id -g)" /data/projects /data/cache /data/models /data/sandboxes /data/workspace
     run $SUDO chmod 1777 /data/tmp
-    if [ "$DRY" != 1 ] && [ -d /data/models ]; then run $SUDO btrfs property set /data/models compression no || true; fi
+    if [ "$DRY" = 1 ] || [ -d /data/models ]; then run $SUDO btrfs property set /data/models compression no || true; fi
     log "  note: /tmp is mounted from @tmp at the next boot. Do not mask tmp.mount."
 }
 
@@ -776,10 +764,10 @@ install_launcher() {
 [Desktop Entry]
 Type=Application
 Name=Dev machine setup
-Comment=Menu-driven setup for the data drive, toolchains, Docker, apps and sandboxes
+Comment=Terminal menus to set up the data drive, toolchains, Docker, apps and sandboxes
 Exec=$SCRIPT_DIR/devsetup.sh
 Icon=system-software-install
-Terminal=false
+Terminal=true
 Categories=Development;
 EOF
     chmod +x "$desk/devsetup.desktop"
@@ -789,31 +777,67 @@ EOF
 
 # ---------- main ----------
 
+collect_answers() {
+    # Ask every question of every selected module. Nothing changes on the machine.
+    COLLECT=1; DRY=1
+    select_modules
+    local m
+    for m in $MODULES; do
+        case "$m" in
+            storage|boot|sudo|env|apt|rust|go|node|uv|npm|git|docker|flatpak|dedup|gcloud|kaggle|sandboxes|gm|skills) "mod_$m" ;;
+            *) die "unknown module: $m" ;;
+        esac
+    done
+    COLLECT=0; DRY=$REAL_DRY
+}
+
+review_answers() {
+    # Show the saved collection in a scrollable box, then ask once before anything runs.
+    [ "$UI" = none ] && return 0
+    whiptail --title "devsetup: review collected answers" --scrolltext --textbox "$ANSWERS" 22 78 || true
+    whiptail --title "devsetup: review" --yesno "Run these now? Destructive steps were already confirmed while collecting.
+Answers are saved to $ANSWERS, so the same run can be repeated with --answers." 12 78 \
+        || { log "stopped at review; re-run later with: $0 --answers $ANSWERS"; exit 0; }
+}
+
 main() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --dry-run) DRY=1 ;;
             --answers) ANSWERS_IN="$2"; shift ;;
+            --collect-only) COLLECT_ONLY=1 ;;
             --install-launcher) install_launcher; exit 0 ;;
             --help|-h) usage ;;
             *) die "unknown option: $1" ;;
         esac
         shift
     done
+    REAL_DRY=$DRY
     mkdir -p "$STATE_DIR" "$LOG_DIR"
     touch "$LOG" "$ANSWERS"
     preflight
-    if [ -n "$ANSWERS_IN" ]; then load_answers "$ANSWERS_IN"; fi
-    if [ -z "$ANSWERS_IN" ] && [ "$UI" != none ]; then
-        local welcome="This sets up the data drive, shared toolchains, Docker, flatpak and the sandboxes.
+    if [ -n "$ANSWERS_IN" ]; then
+        load_answers "$ANSWERS_IN"
+    else
+        if [ "$UI" != none ]; then
+            local welcome="Step 1 of 2: answer the questions. Nothing changes until you review the list and confirm.
 
-Destructive steps (formatting a drive, boot changes, sudo) ask again before they run."
-        case "$UI" in
-            zenity) zenity --info --title="devsetup" --text="$welcome" --width=460 ;;
-            whiptail) whiptail --title "devsetup" --msgbox "$welcome" 12 76 ;;
-        esac
+Destructive steps (formatting a drive, boot changes, sudo) ask again."
+            case "$UI" in
+                whiptail) whiptail --title "devsetup" --msgbox "$welcome" 12 76 ;;
+            esac
+        fi
+        collect_answers
+        # ask_input and ask_menu run in subshells, so their answers reach the file, not this shell. Reload.
+        load_answers "$ANSWERS"
+        log "collected: $ANSWERS"
+        if [ "$COLLECT_ONLY" = 1 ]; then
+            log "collection saved. Run it on a similar machine with: $0 --answers $ANSWERS"
+            exit 0
+        fi
+        review_answers
     fi
-    select_modules
+    [ -n "$(get MODULES)" ] || die "no modules selected"
     log "selected: $MODULES"
     if [ "$DRY" = 1 ]; then log "DRY RUN: nothing will change"; fi
     local m

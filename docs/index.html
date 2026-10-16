@@ -59,14 +59,15 @@
 </nav>
 
 <h2 id="quick">Quick start: the setup script</h2>
-<p>Most of this guide is automated by <code>setup/devsetup.sh</code>. It shows a menu of modules, asks about each destructive step, and runs what you select. On a desktop it uses graphical dialogs. In a terminal it uses whiptail, and otherwise plain prompts.</p>
+<p>Most of this guide is automated by <code>setup/devsetup.sh</code>. It runs in two steps. First it asks every question in terminal menus, with nothing changed on the machine. Then it shows the collected answers for review, and runs them in one pass. A collection can be saved and reused on a similar machine.</p>
 <pre><code>git clone https://github.com/AnEntrypoint/devsetup
 cd devsetup
-./setup/devsetup.sh                   # menus
-./setup/devsetup.sh --dry-run         # print every action, change nothing
-./setup/devsetup.sh --answers FILE    # run from a saved answers file (see setup/answers.example.env)
-./setup/devsetup.sh --install-launcher  # desktop icon for the menus</code></pre>
-<p>Answers are saved to <code>~/.config/devsetup/answers.env</code>, so a run can be repeated. The run log is in <code>~/.local/state/devsetup/</code>. Passwords and tokens are never asked for or stored. Formatting a drive needs you to type <code>ERASE &lt;device&gt;</code> exactly. Sections 1 to 18 explain what each module does and why.</p>
+./setup/devsetup.sh                       # collect answers in menus, review, then run
+./setup/devsetup.sh --collect-only        # collect answers and save them; change nothing
+./setup/devsetup.sh --dry-run             # collect, then print every action; change nothing
+./setup/devsetup.sh --answers FILE        # run a saved collection with no prompts
+./setup/devsetup.sh --install-launcher    # desktop icon that opens the menus in a terminal</code></pre>
+<p>The menus are terminal-only: whiptail on a terminal, and plain prompts when there is no terminal. Answers are saved to <code>~/.config/devsetup/answers.env</code>, so a run can be repeated. The run log is in <code>~/.local/state/devsetup/</code>. Passwords and tokens are never asked for or stored. Formatting a drive needs you to type <code>ERASE &lt;device&gt;</code> exactly. Sections 1 to 18 explain what each module does and why.</p>
 
 <h2 id="principles">1. Principles</h2>
 <ul>
@@ -186,7 +187,10 @@ RUSTUP_HOME=/data/cache/rustup CARGO_HOME=/data/cache/cargo \
 <h3>Go</h3>
 <p>Download the tarball from go.dev, check its SHA-256 against the value on the download page, then:</p>
 <pre><code>sudo tar -C /data/cache -xzf go&lt;version&gt;.linux-amd64.tar.gz   # creates /data/cache/go
+sudo mv /data/cache/go /data/cache/go&lt;version&gt;               # keep each version in its own folder
+sudo ln -sfn /data/cache/go&lt;version&gt; /data/cache/go
 sudo ln -sfn /data/cache/go /usr/local/go</code></pre>
+<p>The setup script does the same, and keeps the previous version in a <code>go-prev-&lt;timestamp&gt;</code> folder when it replaces one.</p>
 
 <h3>Node</h3>
 <p>Download the latest LTS tarball from nodejs.org, not the newest release, and check it against <code>SHASUMS256.txt</code>. Check the current LTS with <code>curl -fsSL https://nodejs.org/dist/index.json</code>, which marks LTS releases. The host and every sandbox must run the same version. Because the sandboxes mount <code>/data/cache/node</code>, one install covers all of them:</p>
