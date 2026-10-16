@@ -54,7 +54,7 @@ PASS="$NAME"   # fixed per sandbox; reachable only on 127.0.0.1
   --hostname "$NAME" \
   -e PUID=1000 -e PGID=1000 -e TZ="$(cat /etc/timezone 2>/dev/null || echo UTC)" \
   -e CUSTOM_USER=dev -e PASSWORD="$PASS" \
-  -e PATH="/lsiopy/bin:/data/cache/google-cloud-sdk/bin:/data/cache/npm-global/bin:/usr/local/go/bin:/data/cache/bin:/data/cache/cargo/bin:/data/cache/node/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  -e PATH="/lsiopy/bin:/data/cache/bin:/data/cache/google-cloud-sdk/bin:/data/cache/npm-global/bin:/usr/local/go/bin:/data/cache/bin:/data/cache/cargo/bin:/data/cache/node/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
   -e RUSTUP_HOME=/data/cache/rustup \
   -e CARGO_HOME=/data/cache/cargo \
   -e GOPATH=/data/projects/go \
@@ -72,6 +72,7 @@ PASS="$NAME"   # fixed per sandbox; reachable only on 127.0.0.1
   -v "$HOME_DIR:/config" \
   -v "$BASE/$NAME/creds/gh:/config/.config/gh" \
   -v "$BASE/$NAME/creds/gcloud:/config/.config/gcloud" \
+  -v "$BASE/$NAME/creds/kaggle:/config/.kaggle" \
   -v /data/projects:/data/projects \
   -v /data/workspace:/workspace \
   -v /data/cache/gm:/data/cache/gm \
