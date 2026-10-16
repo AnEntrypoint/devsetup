@@ -58,6 +58,16 @@
 </ol>
 </nav>
 
+<h2 id="quick">Quick start: the setup script</h2>
+<p>Most of this guide is automated by <code>setup/devsetup.sh</code>. It shows a menu of modules, asks about each destructive step, and runs what you select. On a desktop it uses graphical dialogs. In a terminal it uses whiptail, and otherwise plain prompts.</p>
+<pre><code>git clone https://github.com/AnEntrypoint/devsetup
+cd devsetup
+./setup/devsetup.sh                   # menus
+./setup/devsetup.sh --dry-run         # print every action, change nothing
+./setup/devsetup.sh --answers FILE    # run from a saved answers file (see setup/answers.example.env)
+./setup/devsetup.sh --install-launcher  # desktop icon for the menus</code></pre>
+<p>Answers are saved to <code>~/.config/devsetup/answers.env</code>, so a run can be repeated. The run log is in <code>~/.local/state/devsetup/</code>. Passwords and tokens are never asked for or stored. Formatting a drive needs you to type <code>ERASE &lt;device&gt;</code> exactly. Sections 1 to 18 explain what each module does and why.</p>
+
 <h2 id="principles">1. Principles</h2>
 <ul>
   <li><strong>Everything installed on purpose goes to the btrfs data drive.</strong> Standalone tools go under <code>/data/cache</code>, projects under <code>/data/projects</code>, desktop apps through flatpak on <code>/data/flatpak</code>, and Docker under <code>/data/docker</code>. Block deduplication then covers all of it.</li>
