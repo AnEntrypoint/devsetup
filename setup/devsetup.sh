@@ -37,7 +37,7 @@ SUDO=""
 # Retries and timeouts so a stalled mirror fails fast instead of hanging for minutes.
 APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
 
-MODULES_ALL="storage boot sudo env apt rust go node uv npm git docker flatpak dedup gcloud kaggle sandboxes gm skills"
+MODULES_ALL="storage boot sudo env apt rust go node uv npm git docker flatpak dedup gcloud kaggle sandboxes gm skills tmux dnshook claudelogin toolperms winmount sharedenv homebind"
 MODULE_LABELS=(
   "storage|Data drive: btrfs subvolumes, mounts, /tmp on btrfs|on"
   "boot|Boot: root mounts read-write (GRUB rw)|on"
@@ -56,6 +56,13 @@ MODULE_LABELS=(
   "gcloud|Google Cloud SDK, shared copy on /data|off"
   "kaggle|Kaggle CLI, shared|off"
   "sandboxes|Sandboxes: template, image, launcher, desktop icons|on"
+  "tmux|Shared tmux config: /etc/tmux.conf (host and sandboxes)|on"
+  "dnshook|Keep sandbox DNS current when the network changes (NetworkManager hook)|on"
+  "claudelogin|One Claude login for the host and every sandbox (~/.claude link)|on"
+  "toolperms|Shared tool folders writable by you (go, gcloud)|on"
+  "winmount|Windows NTFS drive at /mnt/windows, with desktop shortcut (asks for UUID)|off"
+  "sharedenv|Installs go to shared /data/cache for every container: npm allow-scripts, shared env file, profile hook|on"
+  "homebind|Host home persists: /home/dev bind-mounted from /data/cache/home-dev (fstab)|on"
   "gm|gm, shared bundle (touches host Zed config)|off"
   "skills|grill-me skill in the sandbox template|off"
 )
@@ -648,6 +655,10 @@ mod_sandboxes() {
     run $SUDO chown -R "$(id -u):$(id -g)" /data/sandboxes /data/cache/claude-auth /data/cache/claude-state /data/cache/gm
     run mkdir -p "$dsb"
     run cp "$REPO_DIR/sandbox/Dockerfile" "$REPO_DIR/sandbox/launch.sh" "$REPO_DIR/sandbox/stop.sh" "$dsb/"
+    run cp -r "$REPO_DIR/sandbox/tmux" "$REPO_DIR/sandbox/chromium-gpu.conf" "$dsb/"
+    run mkdir -p /data/cache/bin /data/cache/ms-playwright
+    run cp "$REPO_DIR/sandbox/playwright-gpu-shim" /data/cache/bin/playwright-gpu-shim
+    run chmod +x /data/cache/bin/playwright-gpu-shim
     run chmod +x "$dsb/launch.sh" "$dsb/stop.sh"
 
     if [ ! -d "$tpl" ]; then run $SUDO btrfs subvolume create "$tpl"; fi
@@ -669,7 +680,9 @@ export UV_CACHE_DIR=/data/cache/uv
 export UV_PYTHON_INSTALL_DIR=/data/cache/uv/python
 export NPM_CONFIG_CACHE=/data/cache/npm
 export TMPDIR=/tmp
-export PATH="/data/cache/npm-global/bin:/data/cache/bin:/data/cache/node/current/bin:$PATH"
+export VIRTUAL_ENV=/data/cache/venvs/ml
+export PYTHONUSERBASE=/data/cache/pyuser
+export PATH="/data/cache/venvs/ml/bin:/data/cache/npm-global/bin:/data/cache/bin:/data/cache/node/current/bin:$PATH"
 EOF
         cp "$tpl/.profile" "$tpl/.bashrc"
         printf '\n# Git packs and caches are read-only by design; rm should not prompt on them\nalias rm="rm -f"\n' >>"$tpl/.bashrc"
@@ -753,6 +766,124 @@ EOF
     log "  sign in per sandbox: gh auth login (and gcloud / kaggle when needed). The gh login is not copied."
 }
 
+mod_sharedenv() {
+    log "== sharedenv: installs from any container land in shared /data/cache"
+    log "  npm 12 blocks install scripts unless allowed, and sandbox homes don't carry the host ~/.npmrc,"
+    log "  so the allowlist goes in the shared global npmrc that every container mounts."
+    run mkdir -p /data/cache/npm-global/etc
+    run npm config set allow-scripts="@anthropic-ai/claude-code,frida" --location=global
+    run npm config set allow-scripts="@anthropic-ai/claude-code,frida" --location=user
+    put /data/cache/devshared.env <<'EOF'
+# Shared tool-install environment. Sourced by /etc/profile.d/devshared.sh on the host.
+export NPM_CONFIG_PREFIX=/data/cache/npm-global
+export NPM_CONFIG_CACHE=/data/cache/npm
+export NPM_CONFIG_GLOBALCONFIG=/data/cache/npm-global/etc/npmrc
+export UV_CACHE_DIR=/data/cache/uv
+export UV_PYTHON_INSTALL_DIR=/data/cache/uv/python
+export CARGO_HOME=/data/cache/cargo
+export RUSTUP_HOME=/data/cache/rustup
+export GOPATH=/data/projects/go
+export GOCACHE=/data/cache/go-build
+export GOMODCACHE=/data/cache/go-mod
+export PATH="/data/cache/npm-global/bin:/data/cache/bin:/data/cache/cargo/bin:$PATH"
+EOF
+    printf '%s\n' '[ -r /data/cache/devshared.env ] && . /data/cache/devshared.env' | put /etc/profile.d/devshared.sh sudo
+    run $SUDO chmod 644 /etc/profile.d/devshared.sh
+    log "  containers get the same settings from sandbox/launch.sh (NPM_CONFIG_GLOBALCONFIG and friends)."
+}
+
+mod_homebind() {
+    log "== homebind: /home/dev persists on the data drive, bind-mounted from /data/cache/home-dev"
+    log "  Anything installs write under ~ (dot folders included), and a restart keeps it."
+    local src=/data/cache/home-dev
+    if [ "$DRY" = 1 ]; then plan "rsync $HOME -> $src; bind mount over $HOME via fstab"; return 0; fi
+    if mountpoint -q "$HOME"; then log "  $HOME is already a mount point; skipped"; return 0; fi
+    run mkdir -p "$src"
+    run rsync -aHAX --numeric-ids "$HOME/" "$src/"
+    echo "/data/cache/home-dev $HOME none bind,nofail,x-systemd.requires-mountpoint=/data/cache 0 0" \
+        | managed_block /etc/fstab homebind sudo
+    run $SUDO systemctl daemon-reload
+    run $SUDO mount "$HOME"
+}
+
+mod_tmux() {
+    log "== tmux: shared config at /etc/tmux.conf (the sandbox image uses the same file)"
+    run $SUDO install -m 0644 "$REPO_DIR/sandbox/tmux/tmux.conf" /etc/tmux.conf
+}
+
+mod_dnshook() {
+    log "== dnshook: refresh sandbox DNS on every network change"
+    log "  Docker copies host DNS into each container at start, so a Wi-Fi switch leaves running sandboxes on the old nameservers."
+    local tmp; tmp="$(mktemp)"
+    cat >"$tmp" <<'EOF'
+#!/bin/sh
+# Docker copies the host DNS config into each container at start, so a Wi-Fi switch leaves
+# running containers pointing at the old network's nameservers. On every network change,
+# rewrite each running container's resolv.conf in place (the bind mount sees the new contents).
+case "$2" in up|down|dhcp4-change|dhcp6-change|connectivity-change) ;; *) exit 0 ;; esac
+SRC=/run/systemd/resolve/resolv.conf
+[ -r "$SRC" ] || exit 0
+NS=$(grep '^nameserver' "$SRC" | grep -v '^nameserver 127\.')
+[ -n "$NS" ] || exit 0
+SEARCH=$(grep '^search' "$SRC")
+for id in $(docker ps -q); do
+    f=$(docker inspect --format '{{.ResolvConfPath}}' "$id") || continue
+    { echo "# Managed by /etc/NetworkManager/dispatcher.d/50-docker-dns"; [ -n "$SEARCH" ] && echo "$SEARCH"; echo "$NS"; } > "$f"
+done
+EOF
+    run $SUDO install -m 0755 "$tmp" /etc/NetworkManager/dispatcher.d/50-docker-dns
+    rm -f "$tmp"
+}
+
+mod_claudelogin() {
+    log "== claudelogin: one Claude login for the host and every sandbox"
+    local shared=/data/cache/claude-auth/.credentials.json host="$HOME/.claude/.credentials.json"
+    if [ "$DRY" = 1 ]; then plan "link $host -> $shared"; return 0; fi
+    mkdir -p "$HOME/.claude" /data/cache/claude-auth
+    if [ -f "$host" ] && [ ! -L "$host" ]; then
+        if [ -f "$shared" ] && ! cmp -s "$host" "$shared"; then
+            cp -a "$shared" "$shared.bak-$(date +%F-%H%M%S)"
+            log "  kept the previous shared login as a .bak file"
+        fi
+        mv -f "$host" "$shared"
+    fi
+    ln -sfn "$shared" "$host"
+    log "  $host -> $shared"
+    log "  if a login stops working after a refresh, check that $host is still a symlink."
+}
+
+mod_toolperms() {
+    log "== toolperms: shared tool folders writable by you (and so by the sandboxes)"
+    local d
+    for d in /data/cache/go /data/cache/google-cloud-sdk; do
+        if [ -d "$d" ]; then run $SUDO chown -R "$(id -u):$(id -g)" "$d"; fi
+    done
+}
+
+mod_winmount() {
+    log "== winmount: Windows NTFS partition at /mnt/windows, mounted on demand"
+    log "  Find the UUID with: sudo blkid -s UUID -o value /dev/nvmeXnYpZ (the NTFS partition)"
+    local uuid
+    uuid="$(ask_input WIN_UUID "NTFS partition UUID (blank to skip):" "")"
+    if [ -z "$uuid" ]; then log "  no UUID given; skipped"; return 0; fi
+    run $SUDO mkdir -p /mnt/windows
+    printf '# Windows NTFS partition, mounted on demand from the desktop shortcut\nUUID=%s  /mnt/windows  ntfs-3g  noauto,nofail,uid=%s,gid=%s,umask=022  0  0\n' \
+        "$uuid" "$(id -u)" "$(id -g)" | managed_block /etc/fstab winmount sudo
+    run $SUDO systemctl daemon-reload
+    run mkdir -p "$HOME/Desktop"
+    put "$HOME/Desktop/windows-drive.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Windows drive
+Comment=Mount the Windows NTFS partition at /mnt/windows and open it
+Exec=sh -c 'mountpoint -q /mnt/windows || pkexec /bin/mount /mnt/windows; xdg-open /mnt/windows'
+Icon=drive-harddisk-windows
+Terminal=false
+Categories=System;
+EOF
+    run chmod +x "$HOME/Desktop/windows-drive.desktop"
+}
+
 # ---------- summary ----------
 
 summary() {
@@ -792,7 +923,7 @@ collect_answers() {
     local m
     for m in $MODULES; do
         case "$m" in
-            storage|boot|sudo|env|apt|rust|go|node|uv|npm|git|docker|flatpak|dedup|gcloud|kaggle|sandboxes|gm|skills) "mod_$m" ;;
+            storage|boot|sudo|env|apt|rust|go|node|uv|npm|git|docker|flatpak|dedup|gcloud|kaggle|sandboxes|gm|skills|tmux|dnshook|claudelogin|toolperms|winmount|sharedenv|homebind) "mod_$m" ;;
             *) die "unknown module: $m" ;;
         esac
     done
@@ -851,7 +982,7 @@ Destructive steps (formatting a drive, boot changes, sudo) ask again."
     local m
     for m in $MODULES; do
         case "$m" in
-            storage|boot|sudo|env|apt|rust|go|node|uv|npm|git|docker|flatpak|dedup|gcloud|kaggle|sandboxes|gm|skills)
+            storage|boot|sudo|env|apt|rust|go|node|uv|npm|git|docker|flatpak|dedup|gcloud|kaggle|sandboxes|gm|skills|tmux|dnshook|claudelogin|toolperms|winmount)
                 "mod_$m" ;;
             *) log "unknown module: $m" ;;
         esac

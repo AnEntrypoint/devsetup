@@ -352,12 +352,15 @@ sudo chown 1000:1000 /data/sandboxes/shared-home
 sudo docker build -t dev-desktop:latest .
 ./launch.sh dev1     # starts it and opens http://127.0.0.1:3001 in the default browser
 ./stop.sh dev1</code></pre>
-<p><code>launch.sh</code> does this on every start:</p>
+<p><code>launch.sh</code> keeps each sandbox between restarts:</p>
 <ul>
   <li>leaves a running sandbox alone and reopens its page</li>
-  <li>removes the previous home and clones a fresh one from the template (a btrfs snapshot, so it's instant)</li>
+  <li>if the sandbox's container exists but is stopped, starts it again. Its writable layer keeps apt packages and anything else installed in it</li>
+  <li>on the first start, clones the home from the template (a btrfs snapshot, so it's instant). After that the home is kept: dot folders, npm globals, and config written by installs all stay</li>
+  <li><code>./launch.sh devN --recreate</code> rebuilds the home from the template and removes the container. Use it only for a clean sandbox; it drops everything installed in that sandbox</li>
   <li>seeds the sandbox's gh login from the template, if the sandbox doesn't have one yet</li>
-  <li>sets a plain solid desktop colour for the sandbox, written into its fresh XFCE config (dev1 blue, dev2 green, dev3 red, dev4 purple; <code>bgcolor.py</code> writes the file)</li>
+  <li>sets a plain solid desktop colour for the sandbox, written into its XFCE config on first start (dev1 blue, dev2 green, dev3 red, dev4 purple; <code>bgcolor.py</code> writes the file)</li>
+  <li>passes the shared npm settings (<code>NPM_CONFIG_PREFIX</code>, <code>NPM_CONFIG_GLOBALCONFIG</code>) so installs from any container use <code>/data/cache/npm-global</code></li>
   <li>binds the web desktop to <code>127.0.0.1</code>, with the password set to the sandbox name by default. Change it for your setup.</li>
   <li>waits for the web desktop to answer, then opens it in the default browser</li>
   <li>logs each run to <code>/data/sandboxes/logs/devN.log</code></li>
@@ -388,7 +391,8 @@ HOME=/data/sandboxes/shared-home npx -y skills@latest add mattpocock/skills --sk
   <tr><td>Claude projects and history</td><td><code>/data/cache/claude-state</code>, linked from the template</td><td>Read-write. Starts empty. Shared between sandboxes, not copied from the host.</td></tr>
   <tr><td>gm bundle</td><td><code>/data/cache/gm</code></td><td>Read-write, so one self-update serves all sandboxes</td></tr>
   <tr><td>GitHub login</td><td>Copied into the template, seeded per sandbox</td><td>Read-write per sandbox</td></tr>
-  <tr><td>Host home, browser profiles, host keyring</td><td>Not mounted</td><td>Never</td></tr>
+  <tr><td>Install settings (npm allow-scripts, shared env)</td><td><code>/data/cache/npm-global/etc/npmrc</code>, read by every container through the npm prefix; host also gets <code>/data/cache/devshared.env</code> via <code>/etc/profile.d</code></td><td>Read-only for containers, set by the sharedenv module</td></tr>
+  <tr><td>Host home, browser profiles, host keyring</td><td>Host home is a bind of <code>/data/cache/home-dev</code>; profiles and keyring are not mounted</td><td>Host only; profiles and keyring never reach a sandbox</td></tr>
   <tr><td>Docker socket, X11, Wayland and D-Bus sockets</td><td>Not mounted</td><td>Never</td></tr>
 </table>
 <p>The sandboxes run with all capabilities dropped except the few the desktop needs, with <code>no-new-privileges</code>, a memory cap and a process limit. The web desktop listens only on <code>127.0.0.1</code>.</p>
@@ -398,7 +402,7 @@ HOME=/data/sandboxes/shared-home npx -y skills@latest add mattpocock/skills --sk
   <li><strong>Claude login:</strong> log in on the host with <code>claude</code> once. <code>~/.claude/.credentials.json</code> is a symlink into <code>/data/cache/claude-auth</code>, so every sandbox picks it up.</li>
   <li><strong>gm:</strong> the bundle updates itself. To reinstall, repeat section 11.</li>
   <li><strong>gcloud:</strong> refresh the shared SDK after upgrading on the host (section 10).</li>
-  <li><strong>Template:</strong> edits apply to sandboxes on their next start, since every start clones the template again.</li>
+  <li><strong>Template:</strong> edits reach only sandboxes created after the edit. Existing sandboxes keep their home; to pick up a template change, rebuild one with <code>launch.sh devN --recreate</code>, or copy the change in by hand.</li>
   <li><strong>Windows partition:</strong> it's mounted read-only and by hand, not from fstab. Mount it with <code>-o ro</code> and leave it read-only, so Windows' hibernation or fast startup can't corrupt it.</li>
   <li><strong>Kaggle:</strong> the CLI is shared, but each sandbox keeps its own token. Do not copy the host token into the template unless you choose to.</li>
   <li><strong>Deleting files in the workspace:</strong> git makes its pack files read-only, and <code>rm -r</code> asks for each one. The template aliases <code>rm</code> to <code>rm -f</code> for interactive shells, so deletes don't stop partway. The files belong to the sandbox user, so no sudo is needed.</li>
@@ -424,7 +428,9 @@ HOME=/data/sandboxes/shared-home npx -y skills@latest add mattpocock/skills --sk
 <ul>
   <li><strong>apt packages</strong> under <code>/usr</code> (compilers, libraries) stay on the system drive. Only the download cache has moved.</li>
   <li><strong>snap</strong> stays on the system drive, because its store can't be relocated safely.</li>
-  <li><strong>The home directory</strong> is still on the system drive. The btrfs move is planned, not done.</li>
+  <li><strong>The host home directory</strong> is a bind mount of <code>/data/cache/home-dev</code> (btrfs), set up by the <code>homebind</code> module, so dot folders from installs persist across restarts. Making the home a btrfs subvolume of its own is still planned.</li>
+  <li><strong>apt installs</strong> are per container. A package installed in dev1 is not in dev2. Persistence covers each sandbox's own container, not a shared package set.</li>
+  <li><strong>Analysis engines for reverse engineering</strong> (Ghidra, IDA, jadx, Kuna) must be supplied by the user. <code>rea setup</code> doesn't download them.</li>
   <li><strong>The gcloud SDK</strong> in <code>/data/cache</code> is a copy, so it doesn't follow apt upgrades.</li>
   <li><strong>The sandbox GitHub login</strong> is a copied token. Replace it with a fine-grained token (section 15).</li>
   <li><strong>npx and install scripts:</strong> npm 12 blocks install scripts in <code>npx</code> runs, so install packages that need them globally instead (section 9).</li>

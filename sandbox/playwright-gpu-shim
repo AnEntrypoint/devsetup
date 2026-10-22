@@ -1,0 +1,16 @@
+#!/bin/sh
+# Make Playwright's bundled Chromium use the NVIDIA GPU instead of SwiftShader (CPU rendering).
+# Playwright passes --use-angle=swiftshader; flags appended after its arguments win, so the GPU
+# flags go after "$@". Idempotent: a chrome that is already a shim is left alone.
+# usage: playwright-gpu-shim [BROWSERS_DIR]   (default: $PLAYWRIGHT_BROWSERS_PATH or ~/.cache/ms-playwright)
+DIR=${1:-${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}}
+GPU_FLAGS="--ozone-platform=x11 --use-angle=vulkan --ignore-gpu-blocklist"
+[ -d "$DIR" ] || { echo "no browsers at $DIR"; exit 0; }
+find "$DIR" -type f -name chrome -path '*chrome-linux*' 2>/dev/null | while read -r bin; do
+    dir=$(dirname "$bin")
+    if head -c 2 "$bin" | grep -q '#!'; then echo "already shimmed: $bin"; continue; fi
+    mv "$bin" "$dir/chrome.real"
+    printf '%s\n' '#!/bin/sh' 'HERE=$(dirname "$0")' "exec \"\$HERE/chrome.real\" \"\$@\" $GPU_FLAGS" > "$bin"
+    chmod 755 "$bin"
+    echo "shimmed: $bin"
+done
