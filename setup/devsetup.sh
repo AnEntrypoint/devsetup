@@ -37,7 +37,7 @@ SUDO=""
 # Retries and timeouts so a stalled mirror fails fast instead of hanging for minutes.
 APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
 
-MODULES_ALL="storage boot sudo env apt rust go node uv npm git docker flatpak dedup gcloud kaggle sandboxes gm skills tmux dnshook claudelogin toolperms winmount sharedenv homebind"
+MODULES_ALL="storage boot sudo env apt rust go node uv npm git docker flatpak dedup gcloud kaggle sandboxes gm skills tmux dnshook claudelogin toolperms winmount sharedenv homebind adb"
 MODULE_LABELS=(
   "storage|Data drive: btrfs subvolumes, mounts, /tmp on btrfs|on"
   "boot|Boot: root mounts read-write (GRUB rw)|on"
@@ -62,6 +62,7 @@ MODULE_LABELS=(
   "toolperms|Shared tool folders writable by you (go, gcloud)|on"
   "winmount|Windows NTFS drive at /mnt/windows, with desktop shortcut (asks for UUID)|off"
   "sharedenv|Installs go to shared /data/cache for every container: npm allow-scripts, shared env file, profile hook|on"
+  "adb|Android platform-tools (adb) in /data/cache, USB for Android devices, one shared adb key for containers|on"
   "homebind|Host home persists: /home/dev bind-mounted from /data/cache/home-dev (fstab)|on"
   "gm|gm, shared bundle (touches host Zed config)|off"
   "skills|grill-me skill in the sandbox template|off"
@@ -806,6 +807,32 @@ mod_homebind() {
     run $SUDO mount "$HOME"
 }
 
+mod_adb() {
+    log "== adb: Android platform-tools in /data/cache, usable from the host and every container"
+    local pt=/data/cache/platform-tools
+    if [ "$DRY" = 1 ]; then plan "install platform-tools to $pt; udev rule; shared key in /data/cache/android-keys"; return 0; fi
+    if [ ! -x "$pt/adb" ]; then
+        local tmp; tmp="$(mktemp -d)"
+        curl -fsSL -o "$tmp/pt.zip" https://dl.google.com/android/repository/platform-tools-latest-linux.zip
+        run unzip -q "$tmp/pt.zip" -d /data/cache
+        rm -rf "$tmp"
+    fi
+    log "  $("$pt/adb" version | head -1)"
+    put /etc/udev/rules.d/51-android.rules sudo <<'EOF'
+# Android devices (ADB, fastboot) for members of plugdev, so adb works without root
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", MODE="0664", GROUP="plugdev", TAG+="uaccess"
+EOF
+    run $SUDO udevadm control --reload-rules
+    run $SUDO udevadm trigger --subsystem-match=usb --action=add
+    run mkdir -p /data/cache/android-keys
+    if [ -d "$HOME/.android" ] && [ ! -L "$HOME/.android" ]; then
+        cp -a "$HOME/.android/." /data/cache/android-keys/ && rm -rf "$HOME/.android"
+    fi
+    run ln -sfn /data/cache/android-keys "$HOME/.android"
+    log "  containers get adb through sandbox/launch.sh (platform-tools, /dev/bus/usb, plugdev, shared keys)."
+    log "  the phone asks once to allow this computer's key: tick 'Always allow'."
+}
+
 mod_tmux() {
     log "== tmux: shared config at /etc/tmux.conf (the sandbox image uses the same file)"
     run $SUDO install -m 0644 "$REPO_DIR/sandbox/tmux/tmux.conf" /etc/tmux.conf
@@ -923,7 +950,7 @@ collect_answers() {
     local m
     for m in $MODULES; do
         case "$m" in
-            storage|boot|sudo|env|apt|rust|go|node|uv|npm|git|docker|flatpak|dedup|gcloud|kaggle|sandboxes|gm|skills|tmux|dnshook|claudelogin|toolperms|winmount|sharedenv|homebind) "mod_$m" ;;
+            storage|boot|sudo|env|apt|rust|go|node|uv|npm|git|docker|flatpak|dedup|gcloud|kaggle|sandboxes|gm|skills|tmux|dnshook|claudelogin|toolperms|winmount|sharedenv|homebind|adb) "mod_$m" ;;
             *) die "unknown module: $m" ;;
         esac
     done

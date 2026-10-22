@@ -17,7 +17,7 @@ case "$NAME" in
     *) echo "usage: $0 dev1|dev2|dev3|dev4 [--recreate]" >&2; exit 2 ;;
 esac
 
-IMAGE=dev-desktop:latest
+IMAGE="${SANDBOX_IMAGE:-dev-desktop:latest}"
 N="${NAME#dev}"
 PORT=$((3000 + N))            # 3001..3004, bound to 127.0.0.1 only
 BASE=/data/sandboxes
@@ -108,7 +108,7 @@ PASS="$NAME"   # fixed per sandbox; reachable only on 127.0.0.1
   --hostname "$NAME" \
   -e PUID=1000 -e PGID=1000 -e TZ="$(cat /etc/timezone 2>/dev/null || echo UTC)" \
   -e CUSTOM_USER=dev -e PASSWORD="$PASS" \
-  -e PATH="/data/cache/venvs/ml/bin:/lsiopy/bin:/data/cache/bin:/data/cache/google-cloud-sdk/bin:/data/cache/npm-global/bin:/usr/local/go/bin:/data/cache/bin:/data/cache/cargo/bin:/data/cache/node/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  -e PATH="/data/cache/platform-tools:/data/cache/venvs/ml/bin:/lsiopy/bin:/data/cache/bin:/data/cache/google-cloud-sdk/bin:/data/cache/npm-global/bin:/usr/local/go/bin:/data/cache/bin:/data/cache/cargo/bin:/data/cache/node/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
   -e RUSTUP_HOME=/data/cache/rustup \
   -e CARGO_HOME=/data/cache/cargo \
   -e GOPATH=/data/projects/go \
@@ -130,6 +130,11 @@ PASS="$NAME"   # fixed per sandbox; reachable only on 127.0.0.1
   --security-opt no-new-privileges:true \
   --pids-limit 4096 --memory 12g --cpus 12 --shm-size 1g \
   --gpus all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics \
+  --group-add "$(getent group plugdev | cut -d: -f3)" \
+  --device-cgroup-rule "c 189:* rwm" \
+  -v /dev/bus/usb:/dev/bus/usb \
+  -v /data/cache/platform-tools:/data/cache/platform-tools:ro \
+  -v /data/cache/android-keys:/config/.android \
   -v "$HOME_DIR:/config" \
   -v "$BASE/$NAME/creds/gh:/config/.config/gh" \
   -v "$BASE/$NAME/creds/gcloud:/config/.config/gcloud" \

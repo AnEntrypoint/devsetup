@@ -392,6 +392,7 @@ HOME=/data/sandboxes/shared-home npx -y skills@latest add mattpocock/skills --sk
   <tr><td>gm bundle</td><td><code>/data/cache/gm</code></td><td>Read-write, so one self-update serves all sandboxes</td></tr>
   <tr><td>GitHub login</td><td>Copied into the template, seeded per sandbox</td><td>Read-write per sandbox</td></tr>
   <tr><td>Install settings (npm allow-scripts, shared env)</td><td><code>/data/cache/npm-global/etc/npmrc</code>, read by every container through the npm prefix; host also gets <code>/data/cache/devshared.env</code> via <code>/etc/profile.d</code></td><td>Read-only for containers, set by the sharedenv module</td></tr>
+  <tr><td>Android devices (USB, adb)</td><td>Host and every sandbox use <code>/data/cache/platform-tools</code>; sandboxes get <code>/dev/bus/usb</code> and the <code>plugdev</code> group; one adb key in <code>/data/cache/android-keys</code></td><td>Only one adb server should own the phone at a time: stop the host adb server before using a sandbox</td></tr>
   <tr><td>Host home, browser profiles, host keyring</td><td>Host home is a bind of <code>/data/cache/home-dev</code>; profiles and keyring are not mounted</td><td>Host only; profiles and keyring never reach a sandbox</td></tr>
   <tr><td>Docker socket, X11, Wayland and D-Bus sockets</td><td>Not mounted</td><td>Never</td></tr>
 </table>
