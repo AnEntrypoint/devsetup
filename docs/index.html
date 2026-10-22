@@ -366,6 +366,9 @@ sudo docker build -t dev-desktop:latest .
   <li>logs each run to <code>/data/sandboxes/logs/devN.log</code></li>
 </ul>
 
+<h3>Taskbar missing</h3>
+<p>If a sandbox shows the desktop with no top bar, the window manager (<code>xfwm4</code>) has usually exited. Its compositor fails on the GPU, and its full-screen window then covers the panel. The launcher now installs <code>sandbox/xfce/xfwm4.xml</code> with compositing off. Check with <code>pgrep -a xfwm4</code> inside the sandbox. To recover a running sandbox, run <code>xfconf-query -c xfwm4 -p /general/use_compositing -s false</code> and <code>xfwm4 --replace &amp;</code> as the sandbox user.</p>
+
 <h3>Desktop icons</h3>
 <p>For each sandbox, make a Start icon that runs <code>launch.sh devN</code> with <code>Terminal=false</code>, and a Stop icon that runs <code>stop.sh devN</code>. Mark them trusted with <code>gio set &lt;file&gt; metadata::trusted true</code>. The Start icon needs no terminal, because the launcher opens the browser itself.</p>
 

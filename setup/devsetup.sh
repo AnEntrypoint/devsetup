@@ -656,7 +656,7 @@ mod_sandboxes() {
     run $SUDO chown -R "$(id -u):$(id -g)" /data/sandboxes /data/cache/claude-auth /data/cache/claude-state /data/cache/gm
     run mkdir -p "$dsb"
     run cp "$REPO_DIR/sandbox/Dockerfile" "$REPO_DIR/sandbox/launch.sh" "$REPO_DIR/sandbox/stop.sh" "$dsb/"
-    run cp -r "$REPO_DIR/sandbox/tmux" "$REPO_DIR/sandbox/chromium-gpu.conf" "$dsb/"
+    run cp -r "$REPO_DIR/sandbox/tmux" "$REPO_DIR/sandbox/xfce" "$REPO_DIR/sandbox/chromium-gpu.conf" "$dsb/"
     run mkdir -p /data/cache/bin /data/cache/ms-playwright
     run cp "$REPO_DIR/sandbox/playwright-gpu-shim" /data/cache/bin/playwright-gpu-shim
     run chmod +x /data/cache/bin/playwright-gpu-shim

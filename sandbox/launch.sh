@@ -84,6 +84,8 @@ if [ "$RECREATE" = "--recreate" ] || [ ! -d "$HOME_DIR" ]; then
     XFCONF="$HOME_DIR/.config/xfce4/xfconf/xfce-perchannel-xml"
     sudo -n mkdir -p "$XFCONF"
     sudo -n python3 /data/projects/dev-sandbox/bgcolor.py "$BG" "$XFCONF/xfce4-desktop.xml"
+# Window manager: compositing off (the GPU compositor hides the top panel)
+sudo -n install -m 0644 "$(dirname "$(readlink -f "$0")")/xfce/xfwm4.xml" "$XFCONF/xfwm4.xml"
     sudo -n chown -R 1000:1000 "$HOME_DIR/.config"
     echo "$NAME desktop colour $BG"
 
