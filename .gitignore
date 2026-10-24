@@ -1,3 +1,3 @@
 # Tool state directories, never part of the setup
 .gm/
-.agentplug/
+.agentplug*/
