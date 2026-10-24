@@ -4,6 +4,6 @@ How to build a dev machine the way AnEntrypoint's machines are built: one btrfs 
 
 - Guide: https://anentrypoint.github.io/devsetup/ (source: `docs/index.html`)
 - `setup/devsetup.sh`: menu-driven setup for a new machine (terminal menus: collect answers, review, then run). `setup/answers.example.env` shows the answers file for unattended runs.
-- `sandbox/`: the sandbox image definition (`Dockerfile`) and its start and stop scripts (`launch.sh`, `stop.sh`).
+- `sandbox/`: the sandbox image definition (`Dockerfile`) and its start and stop scripts (`launch.sh`, `stop.sh`). A sandbox keeps its installs: stopping one commits it to `dev-desktop:<name>`, and the next container starts from that image. Installs meant for every sandbox go in `/data/cache/usrlocal`, which each sandbox mounts first on `PATH`.
 
 No credentials are in this repository. Each machine and each sandbox signs in to `gh`, `gcloud` and Claude Code itself, or copies the shared login described in the guide.
