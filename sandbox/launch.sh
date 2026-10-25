@@ -41,7 +41,7 @@ case "$MODE" in --recreate|--pristine) RESET=1 ;; esac
 
 # Build caches and the shared install prefix live on the host, so they outlive every container and
 # are read by all four sandboxes. Inductor, Triton and the Hugging Face hub keep their locks.
-mkdir -p "$SHARED/bin" /data/cache/torchinductor /data/cache/triton /data/cache/torch /data/cache/pip /data/cache/pipx /data/cache/uv/tools
+mkdir -p "$SHARED/bin" /data/cache/torchinductor /data/cache/triton /data/cache/torch /data/cache/pip /data/cache/pipx /data/cache/uv/tools /data/cache/apt-shared
 
 open_desktop() {
     local code
@@ -118,13 +118,27 @@ link_shared_usrlocal() {
     echo "$NAME: shared-prefix link step did not run"
 }
 
-# The shared package list (packages.apt): a name missing from this sandbox is installed now, whatever
-# image the sandbox started from. The check is dpkg, so apt runs only when a name is absent.
+# Shared packages: the names in packages.apt plus the hand installs every sandbox has recorded in
+# /data/cache/apt-shared/manual.list. A name missing from this sandbox is installed now, whatever
+# image the sandbox started from. The check is dpkg, so apt runs only when a name is absent. The
+# recorder (apt-record.sh) is linked into the sandbox's apt config here, so every start re-wires it.
 apply_shared_packages() {
-    local list want
-    list="$(dirname "$(readlink -f "$0")")/packages.apt"
-    [ -s "$list" ] || return 0
-    want=$(grep -v '^#' "$list" | tr -s ' \t' '\n' | grep -v '^$' || true)
+    local dir want
+    dir="$(dirname "$(readlink -f "$0")")"
+    mkdir -p /data/cache/apt-shared/state
+    install -m 0755 "$dir/apt-record.sh" /data/cache/apt-shared/record.sh 2>/dev/null || true
+    install -m 0644 "$dir/99shared-installs.conf" /data/cache/apt-shared/99shared-installs.conf 2>/dev/null || true
+    # Linked only where the share is mounted: a container made before it existed keeps no recorder,
+    # and a dangling link there would be an apt config error.
+    "${DOCKER[@]}" exec "$NAME" sh -c '
+        if [ -d /data/cache/apt-shared ]; then
+            ln -sfn /data/cache/apt-shared/99shared-installs.conf /etc/apt/apt.conf.d/99shared-installs
+            /data/cache/apt-shared/record.sh
+        else
+            rm -f /etc/apt/apt.conf.d/99shared-installs
+        fi' 2>/dev/null || echo "$NAME: could not wire the install recorder"
+    want=$( { grep -v '^#' "$dir/packages.apt" 2>/dev/null; cat /data/cache/apt-shared/manual.list 2>/dev/null; } \
+        | tr -s ' \t' '\n' | grep -v '^$' | sort -u || true)
     [ -n "$want" ] || return 0
     "${DOCKER[@]}" exec "$NAME" sh -c '
         missing=""
@@ -321,6 +335,7 @@ CUDA_ENV=()
   -v /data/cache/huggingface:/data/cache/huggingface \
   -v /data/cache/pip:/data/cache/pip \
   -v /data/cache/pipx:/data/cache/pipx \
+  -v /data/cache/apt-shared:/data/cache/apt-shared \
   -v /data/cache/torchinductor:/data/cache/torchinductor \
   -v /data/cache/triton:/data/cache/triton \
   -v /data/cache/torch:/data/cache/torch \
