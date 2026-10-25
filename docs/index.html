@@ -371,6 +371,10 @@ sudo docker build -t dev-desktop:latest .
   <li>waits for the web desktop to answer, then opens it in the default browser</li>
   <li>logs each run to <code>/data/sandboxes/logs/devN.log</code></li>
 </ul>
+<p>A container created before a launcher change keeps the mounts it was started with, because starting it does not rebuild it. Replacing it applies the current mounts, and its installs come back from its image:</p>
+<pre><code>./stop.sh dev4         # commits its installs to dev-desktop:dev4
+docker rm dev4         # removes the old container and its mounts
+./launch.sh dev4       # starts from dev-desktop:dev4 with the current mounts</code></pre>
 
 <h3>Taskbar missing</h3>
 <p>If a sandbox shows the desktop with no top bar, the window manager (<code>xfwm4</code>) has usually exited. Its compositor fails on the GPU, and its full-screen window then covers the panel. The launcher now installs <code>sandbox/xfce/xfwm4.xml</code> with compositing off. Check with <code>pgrep -a xfwm4</code> inside the sandbox. To recover a running sandbox, run <code>xfconf-query -c xfwm4 -p /general/use_compositing -s false</code> and <code>xfwm4 --replace &amp;</code> as the sandbox user.</p>
@@ -408,9 +412,10 @@ HOME=/data/sandboxes/shared-home npx -y skills@latest add mattpocock/skills --sk
   <tr><td>Docker socket, X11, Wayland and D-Bus sockets</td><td>Not mounted</td><td>Never</td></tr>
 </table>
 <p>The sandboxes run with all capabilities dropped except the few the desktop needs, with <code>no-new-privileges</code>, a memory cap and a process limit. The web desktop listens only on <code>127.0.0.1</code>.</p>
+<p>Packages are installed from the host, because a sandbox's desktop user has no sudo. <code>docker exec devN apt-get update</code> and <code>docker exec devN apt-get install -y &lt;package&gt;</code> run as root and install into that container's layer, which the next <code>stop.sh</code> commits. Package triggers may print <code>GDBus.Error ... setuid helper is not correct</code>; the package installs regardless, because the polkit helper cannot run under <code>no-new-privileges</code>.</p>
 
 <h3>Installing something every sandbox can use</h3>
-<p>An install that belongs to all four sandboxes goes into <code>/data/cache/usrlocal</code>, from the host or from inside any sandbox. It is on the host, so it outlives every container, and every sandbox already has it:</p>
+<p>An install that belongs to all four sandboxes goes into <code>/data/cache/usrlocal</code>. Run these on the host as your own user, not inside a sandbox: a sandbox runs as root, and what it writes into the prefix stays root-owned. <code>dpkg -x</code> also sets the owner of the directory it extracts into, which left the prefix unwritable for the host user until it was chowned back. The prefix is on the host, so it outlives every container, and every sandbox already has it:</p>
 <pre><code># a self-contained toolkit in its own directory becomes /usr/local/&lt;name&gt; in every sandbox
 sh cuda_13.0.0_580.65.06_linux.run --silent --toolkit --toolkitpath=/data/cache/usrlocal/cuda
 
@@ -419,8 +424,11 @@ curl -fsSL -o /data/cache/usrlocal/bin/tool https://example.invalid/tool &amp;&a
 
 # a package from the distribution archive, without touching a container's /usr
 cd /tmp &amp;&amp; apt-get download fzf &amp;&amp; dpkg -x fzf_*.deb /data/cache/usrlocal</code></pre>
-<p>A running sandbox sees a new file under <code>/data/cache/usrlocal</code> at once. The environment (<code>PATH</code>, <code>CUDA_HOME</code> when the prefix has a <code>cuda</code> directory) is set when a sandbox starts, so it reaches a sandbox that is already running from its next start.</p>
+<p>In a running sandbox, a file added under <code>/data/cache/usrlocal/bin</code> is on <code>PATH</code> at once, because that directory is mounted and on the path from the start. The <code>/usr/local</code> links are made by the launch step: <code>./launch.sh devN</code> on a running sandbox adds them without restarting it. <code>CUDA_HOME</code> is set when the container starts, so it needs a replacement (see above), not a relaunch.</p>
 <p>An install that only one sandbox needs does not have to move: leave it in the container and <code>./stop.sh devN</code> commits it, so the next start of that sandbox comes back with it.</p>
+
+<h3>GPU libraries and the CUDA toolkit</h3>
+<p>The GPU driver is injected into each sandbox when it starts, so no sandbox stores it. Python GPU stacks take their CUDA runtime from pip, in the shared venvs: <code>/data/cache/venvs/ml</code> has torch 2.14 built for CUDA 13.0. Those packages carry no compiler. A build that needs <code>nvcc</code>, such as flash-attn, needs a toolkit whose version matches torch. This release's <code>nvidia-cuda-toolkit</code> package is 12.4, so install the 13.0 toolkit into the prefix instead (the NVIDIA runfile above, 4.3 GB). That install has not been run on this host yet.</p>
 
 <h2 id="maintenance">17. Maintenance</h2>
 <ul>
@@ -428,7 +436,8 @@ cd /tmp &amp;&amp; apt-get download fzf &amp;&amp; dpkg -x fzf_*.deb /data/cache
   <li><strong>gm:</strong> the bundle updates itself. To reinstall, repeat section 11.</li>
   <li><strong>gcloud:</strong> refresh the shared SDK after upgrading on the host (section 10).</li>
   <li><strong>Template:</strong> edits reach only sandboxes created after the edit. Existing sandboxes keep their home; to pick up a template change, rebuild one with <code>launch.sh devN --recreate</code> (its installs are kept; add <code>--pristine</code> to drop them too), or copy the change in by hand.</li>
-  <li><strong>Sandbox images:</strong> each sandbox that has been stopped with <code>stop.sh</code> owns <code>dev-desktop:devN</code> (its installs) and <code>dev-desktop:devN-prev</code> (the one before). They share their base layers with <code>dev-desktop:latest</code>, so the extra space is the installs. Remove a <code>-prev</code> image when you no longer want that rollback.</li>
+  <li><strong>Sandbox images:</strong> each sandbox that has been stopped with <code>stop.sh</code> owns <code>dev-desktop:devN</code> and <code>dev-desktop:devN-prev</code> (the one before). A commit captures the whole writable layer, <code>/tmp</code> included: dev1's image held 1.3 GB of <code>/tmp</code> scratch beside its installs, so an image grows with what a sandbox wrote there. Excluding <code>/tmp</code> from the commit is not done yet. Remove a <code>-prev</code> image when you no longer want that rollback.</li>
+  <li><strong>Shared installs:</strong> <code>ls /data/cache/usrlocal</code> lists what every sandbox gets, and <code>docker images dev-desktop</code> lists what each sandbox has committed. A container removed by hand with <code>docker rm</code>, without a <code>stop.sh</code> first, loses what it installed since its last commit.</li>
   <li><strong>Windows partition:</strong> it's mounted read-only and by hand, not from fstab. Mount it with <code>-o ro</code> and leave it read-only, so Windows' hibernation or fast startup can't corrupt it.</li>
   <li><strong>Kaggle:</strong> the CLI is shared, but each sandbox keeps its own token. Do not copy the host token into the template unless you choose to.</li>
   <li><strong>Deleting files in the workspace:</strong> git makes its pack files read-only, and <code>rm -r</code> asks for each one. The template aliases <code>rm</code> to <code>rm -f</code> for interactive shells, so deletes don't stop partway. The files belong to the sandbox user, so no sudo is needed.</li>
