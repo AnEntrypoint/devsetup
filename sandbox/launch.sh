@@ -41,7 +41,7 @@ case "$MODE" in --recreate|--pristine) RESET=1 ;; esac
 
 # Build caches and the shared install prefix live on the host, so they outlive every container and
 # are read by all four sandboxes. Inductor, Triton and the Hugging Face hub keep their locks.
-mkdir -p "$SHARED/bin" /data/cache/torchinductor /data/cache/triton /data/cache/torch
+mkdir -p "$SHARED/bin" /data/cache/torchinductor /data/cache/triton /data/cache/torch /data/cache/pip /data/cache/pipx /data/cache/uv/tools
 
 open_desktop() {
     local code
@@ -106,7 +106,11 @@ link_shared_usrlocal() {
                 else
                     ln -sfn "$e" "$t"
                 fi
-            done' >/dev/null 2>&1; then
+            done
+            for d in /data/cache/usrlocal/lib /data/cache/usrlocal/usr/lib /data/cache/usrlocal/usr/lib/x86_64-linux-gnu /data/cache/usrlocal/cuda/lib64; do
+                [ -d "$d" ] && echo "$d"
+            done > /etc/ld.so.conf.d/usrlocal.conf
+            ldconfig' >/dev/null 2>&1; then
             return 0
         fi
         sleep 2
@@ -114,9 +118,27 @@ link_shared_usrlocal() {
     echo "$NAME: shared-prefix link step did not run"
 }
 
+# The shared package list (packages.apt): a name missing from this sandbox is installed now, whatever
+# image the sandbox started from. The check is dpkg, so apt runs only when a name is absent.
+apply_shared_packages() {
+    local list want
+    list="$(dirname "$(readlink -f "$0")")/packages.apt"
+    [ -s "$list" ] || return 0
+    want=$(grep -v '^#' "$list" | tr -s ' \t' '\n' | grep -v '^$' || true)
+    [ -n "$want" ] || return 0
+    "${DOCKER[@]}" exec "$NAME" sh -c '
+        missing=""
+        for p in "$@"; do dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"; done
+        [ -z "$missing" ] && exit 0
+        echo "installing shared packages:$missing"
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends $missing
+    ' sh $want || echo "$NAME: shared package install did not complete (see above)"
+}
+
 if [ -z "$RESET" ] && [ -n "$("${DOCKER[@]}" ps -q -f "name=^${NAME}$")" ]; then
     echo "Already running: http://127.0.0.1:${PORT}"
     link_shared_usrlocal
+    apply_shared_packages
     xdg-open "http://127.0.0.1:${PORT}" >/dev/null 2>&1 || true
     exit 0
 fi
@@ -129,6 +151,7 @@ if [ -z "$RESET" ] && container_exists; then
     fi
     "${DOCKER[@]}" start "$NAME" >/dev/null
     link_shared_usrlocal
+    apply_shared_packages
     echo "$NAME starting at http://127.0.0.1:${PORT}"
     open_desktop
     exit 0
@@ -254,6 +277,11 @@ CUDA_ENV=()
   -e TRITON_CACHE_DIR=/data/cache/triton \
   -e TORCH_HOME=/data/cache/torch \
   -e HF_HOME=/data/cache/huggingface \
+  -e PIP_CACHE_DIR=/data/cache/pip \
+  -e PIPX_HOME=/data/cache/pipx \
+  -e PIPX_BIN_DIR=/data/cache/bin \
+  -e UV_TOOL_DIR=/data/cache/uv/tools \
+  -e UV_TOOL_BIN_DIR=/data/cache/bin \
   -e DISABLE_AUTOUPDATER=1 \
   -p "127.0.0.1:${PORT}:3000" \
   "${UDP_ARGS[@]}" \
@@ -291,6 +319,8 @@ CUDA_ENV=()
   -v /data/cache/go-build:/data/cache/go-build \
   -v /data/cache/go-mod:/data/cache/go-mod \
   -v /data/cache/huggingface:/data/cache/huggingface \
+  -v /data/cache/pip:/data/cache/pip \
+  -v /data/cache/pipx:/data/cache/pipx \
   -v /data/cache/torchinductor:/data/cache/torchinductor \
   -v /data/cache/triton:/data/cache/triton \
   -v /data/cache/torch:/data/cache/torch \
@@ -300,6 +330,7 @@ CUDA_ENV=()
   "$IMAGE_TO_START" >/dev/null
 
 link_shared_usrlocal
+apply_shared_packages
 
 echo "$NAME starting at http://127.0.0.1:${PORT}"
 echo "$NAME started from image $IMAGE_TO_START"

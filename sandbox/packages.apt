@@ -1,0 +1,3 @@
+# Packages every sandbox carries: one apt package name per line; # starts a comment.
+# launch.sh installs any that are missing when a sandbox starts, whatever image it started from.
+# The image build installs them too, so a freshly created sandbox already has them.

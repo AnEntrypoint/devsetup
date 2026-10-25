@@ -414,6 +414,21 @@ HOME=/data/sandboxes/shared-home npx -y skills@latest add mattpocock/skills --sk
 <p>The sandboxes run with all capabilities dropped except the few the desktop needs, with <code>no-new-privileges</code>, a memory cap and a process limit. The web desktop listens only on <code>127.0.0.1</code>.</p>
 <p>Packages are installed from the host, because a sandbox's desktop user has no sudo. <code>docker exec devN apt-get update</code> and <code>docker exec devN apt-get install -y &lt;package&gt;</code> run as root and install into that container's layer, which the next <code>stop.sh</code> commits. Package triggers may print <code>GDBus.Error ... setuid helper is not correct</code>; the package installs regardless, because the polkit helper cannot run under <code>no-new-privileges</code>.</p>
 
+<h3>Where an install lands</h3>
+<p>Each kind of install goes to one of these places. "Shared" means every sandbox sees the same files; "survives" is about the install itself.</p>
+<table>
+  <tr><th>What you install</th><th>Where it lands</th><th>Shared by every sandbox</th><th>Survives a stop and start</th><th>Survives a replacement</th></tr>
+  <tr><td>npm global packages</td><td><code>/data/cache/npm-global</code></td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+  <tr><td>pip with <code>--user</code>, pip's download cache</td><td><code>/data/cache/pyuser</code>, <code>/data/cache/pip</code></td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+  <tr><td><code>uv tool</code> and <code>pipx</code></td><td>Tool environments in <code>/data/cache/uv/tools</code> and <code>/data/cache/pipx</code>; commands in <code>/data/cache/bin</code></td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+  <tr><td>cargo, rustup, go, uv's Python</td><td><code>/data/cache/cargo</code>, <code>/data/cache/rustup</code>, <code>/data/cache/go</code>, <code>/data/cache/uv</code></td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+  <tr><td>a binary or library placed in the prefix</td><td><code>/data/cache/usrlocal</code>; libraries are found through the linker config the launcher writes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+  <tr><td>a package named in <code>packages.apt</code></td><td>The container's <code>/usr</code>; installed at start when missing</td><td>Yes: the list applies to every sandbox</td><td>Yes</td><td>Yes: reinstalled when missing</td></tr>
+  <tr><td>any other apt package</td><td>The container's <code>/usr</code> and <code>/var/lib/dpkg</code></td><td>No</td><td>Yes</td><td>Only if committed (stop.sh or a replacement commits it)</td></tr>
+  <tr><td>files in a sandbox's home</td><td><code>/data/sandboxes/devN/home</code></td><td>No (the Claude login and gm bundle are shared)</td><td>Yes</td><td>Yes: the home is kept</td></tr>
+  <tr><td>files under <code>/tmp</code>, <code>/opt</code>, <code>/etc</code></td><td>The container's writable layer</td><td>No</td><td>Yes</td><td>Only if committed; the commit includes <code>/tmp</code></td></tr>
+</table>
+
 <h3>Installing something every sandbox can use</h3>
 <p>An install that belongs to all four sandboxes goes into <code>/data/cache/usrlocal</code>. Run these on the host as your own user, not inside a sandbox: a sandbox runs as root, and what it writes into the prefix stays root-owned. <code>dpkg -x</code> also sets the owner of the directory it extracts into, which left the prefix unwritable for the host user until it was chowned back. The prefix is on the host, so it outlives every container, and every sandbox already has it:</p>
 <pre><code># a self-contained toolkit in its own directory becomes /usr/local/&lt;name&gt; in every sandbox
@@ -426,6 +441,7 @@ curl -fsSL -o /data/cache/usrlocal/bin/tool https://example.invalid/tool &amp;&a
 cd /tmp &amp;&amp; apt-get download fzf &amp;&amp; dpkg -x fzf_*.deb /data/cache/usrlocal</code></pre>
 <p>In a running sandbox, a file added under <code>/data/cache/usrlocal/bin</code> is on <code>PATH</code> at once, because that directory is mounted and on the path from the start. The <code>/usr/local</code> links are made by the launch step: <code>./launch.sh devN</code> on a running sandbox adds them without restarting it. <code>CUDA_HOME</code> is set when the container starts, so it needs a replacement (see above), not a relaunch.</p>
 <p>An install that only one sandbox needs does not have to move: leave it in the container and <code>./stop.sh devN</code> commits it, so the next start of that sandbox comes back with it.</p>
+<p>A package every sandbox should have goes in <code>sandbox/packages.apt</code> in this repository, one name per line. Copy the file next to <code>launch.sh</code> (setup does this), then start each sandbox: <code>launch.sh</code> installs any listed package that is missing, whatever image the sandbox started from. <code>docker build -t dev-desktop:latest .</code> in the <code>sandbox</code> directory bakes the list into the base image, so sandboxes created afterwards start with it already installed.</p>
 
 <h3>GPU libraries and the CUDA toolkit</h3>
 <p>The GPU driver is injected into each sandbox when it starts, so no sandbox stores it. Python GPU stacks take their CUDA runtime from pip, in the shared venvs: <code>/data/cache/venvs/ml</code> has torch 2.14 built for CUDA 13.0. Those packages carry no compiler. A build that needs <code>nvcc</code>, such as flash-attn, needs a toolkit whose version matches torch. This release's <code>nvidia-cuda-toolkit</code> package is 12.4, so install the 13.0 toolkit into the prefix instead (the NVIDIA runfile above, 4.3 GB). That install has not been run on this host yet.</p>
@@ -438,6 +454,7 @@ cd /tmp &amp;&amp; apt-get download fzf &amp;&amp; dpkg -x fzf_*.deb /data/cache
   <li><strong>Template:</strong> edits reach only sandboxes created after the edit. Existing sandboxes keep their home; to pick up a template change, rebuild one with <code>launch.sh devN --recreate</code> (its installs are kept; add <code>--pristine</code> to drop them too), or copy the change in by hand.</li>
   <li><strong>Sandbox images:</strong> each sandbox that has been stopped with <code>stop.sh</code> owns <code>dev-desktop:devN</code> and <code>dev-desktop:devN-prev</code> (the one before). A commit captures the whole writable layer, <code>/tmp</code> included: dev1's image held 1.3 GB of <code>/tmp</code> scratch beside its installs, so an image grows with what a sandbox wrote there. Excluding <code>/tmp</code> from the commit is not done yet. Remove a <code>-prev</code> image when you no longer want that rollback.</li>
   <li><strong>Shared installs:</strong> <code>ls /data/cache/usrlocal</code> lists what every sandbox gets, and <code>docker images dev-desktop</code> lists what each sandbox has committed. A container removed by hand with <code>docker rm</code>, without a <code>stop.sh</code> first, loses what it installed since its last commit.</li>
+  <li><strong>Do not prune kept images:</strong> <code>docker image prune -a</code> and <code>docker container prune</code> remove the <code>dev-desktop:devN</code> images and stopped containers that hold installs. Remove a rollback image by name (<code>docker rmi dev-desktop:devN-prev</code>) when you no longer want it.</li>
   <li><strong>Windows partition:</strong> it's mounted read-only and by hand, not from fstab. Mount it with <code>-o ro</code> and leave it read-only, so Windows' hibernation or fast startup can't corrupt it.</li>
   <li><strong>Kaggle:</strong> the CLI is shared, but each sandbox keeps its own token. Do not copy the host token into the template unless you choose to.</li>
   <li><strong>Deleting files in the workspace:</strong> git makes its pack files read-only, and <code>rm -r</code> asks for each one. The template aliases <code>rm</code> to <code>rm -f</code> for interactive shells, so deletes don't stop partway. The files belong to the sandbox user, so no sudo is needed.</li>
@@ -461,10 +478,10 @@ cd /tmp &amp;&amp; apt-get download fzf &amp;&amp; dpkg -x fzf_*.deb /data/cache
 
 <h2 id="gaps">18. Known gaps</h2>
 <ul>
-  <li><strong>apt packages</strong> under <code>/usr</code> (compilers, libraries) stay on the system drive. Only the download cache has moved.</li>
+  <li><strong>apt packages</strong> under <code>/usr</code> (compilers, libraries) are installed into each sandbox's own container, not onto the system drive. The package downloads are not shared: the base image's apt hook deletes every <code>.deb</code> after each dpkg run, so a shared download cache would let one sandbox remove another's download mid-install. What is shared is the list in <code>packages.apt</code>, which every sandbox installs at start.</li>
   <li><strong>snap</strong> stays on the system drive, because its store can't be relocated safely.</li>
   <li><strong>The host home directory</strong> is a bind mount of <code>/data/cache/home-dev</code> (btrfs), set up by the <code>homebind</code> module, so dot folders from installs persist across restarts. Making the home a btrfs subvolume of its own is still planned.</li>
-  <li><strong>apt installs</strong> are per container. A package installed in dev1 is not in dev2. Persistence covers each sandbox's own container, not a shared package set.</li>
+  <li><strong>apt installs made by hand</strong> are per container. A package installed in dev1 is not in dev2 unless it is listed in <code>packages.apt</code>. Each sandbox keeps its own by stop.sh or replacement.</li>
   <li><strong>Analysis engines for reverse engineering</strong> (Ghidra, IDA, jadx, Kuna) must be supplied by the user. <code>rea setup</code> doesn't download them.</li>
   <li><strong>The gcloud SDK</strong> in <code>/data/cache</code> is a copy, so it doesn't follow apt upgrades.</li>
   <li><strong>The sandbox GitHub login</strong> is a copied token. Replace it with a fine-grained token (section 15).</li>

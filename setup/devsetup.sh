@@ -655,9 +655,9 @@ mod_sandboxes() {
     run $SUDO mkdir -p /data/sandboxes /data/cache/claude-auth /data/cache/claude-state/projects /data/cache/gm /data/cache/usrlocal
     run $SUDO chown -R "$(id -u):$(id -g)" /data/sandboxes /data/cache/claude-auth /data/cache/claude-state /data/cache/gm /data/cache/usrlocal
     run mkdir -p "$dsb"
-    run cp "$REPO_DIR/sandbox/Dockerfile" "$REPO_DIR/sandbox/launch.sh" "$REPO_DIR/sandbox/stop.sh" "$dsb/"
+    run cp "$REPO_DIR/sandbox/Dockerfile" "$REPO_DIR/sandbox/packages.apt" "$REPO_DIR/sandbox/launch.sh" "$REPO_DIR/sandbox/stop.sh" "$dsb/"
     run cp -r "$REPO_DIR/sandbox/tmux" "$REPO_DIR/sandbox/xfce" "$REPO_DIR/sandbox/chromium-gpu.conf" "$REPO_DIR/sandbox/bgcolor.py" "$dsb/"
-    run mkdir -p /data/cache/bin /data/cache/ms-playwright /data/cache/usrlocal/bin /data/cache/torchinductor /data/cache/triton /data/cache/torch
+    run mkdir -p /data/cache/bin /data/cache/ms-playwright /data/cache/usrlocal/bin /data/cache/torchinductor /data/cache/triton /data/cache/torch /data/cache/pip /data/cache/pipx /data/cache/uv/tools
     run cp "$REPO_DIR/sandbox/playwright-gpu-shim" /data/cache/bin/playwright-gpu-shim
     run chmod +x /data/cache/bin/playwright-gpu-shim
     run chmod +x "$dsb/launch.sh" "$dsb/stop.sh"
