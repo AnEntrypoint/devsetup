@@ -323,6 +323,7 @@ CUDA_ENV=()
   -v /data/cache/npm-global:/data/cache/npm-global \
   -v /data/cache/google-cloud-sdk:/data/cache/google-cloud-sdk \
   -v /data/cache/bin:/data/cache/bin \
+  -v /data/projects/devsetup/sandbox/chromium-gpu.conf:/etc/chromium.d/90-gpu:ro \
   -v "$SHARED:$SHARED" \
   -v /data/cache/go:"$SHARED/go" \
   -v /data/cache/node:/data/cache/node \
