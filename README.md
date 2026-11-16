@@ -3,6 +3,7 @@
 How to build a dev machine the way AnEntrypoint's machines are built: one btrfs data drive for everything installed on purpose, shared toolchains, and sandboxed webtop desktops that share tools and, where we chose to, logins and history.
 
 - Guide: https://anentrypoint.github.io/devsetup/ (source: `docs/index.html`)
+- `docs/storage-maintenance.md`: diagnosing slow disks, btrfs discard and free space, zram swap, idle-time deduplication, and safe cleanup.
 - `setup/devsetup.sh`: menu-driven setup for a new machine (terminal menus: collect answers, review, then run). `setup/answers.example.env` shows the answers file for unattended runs.
 - `sandbox/`: the sandbox image definition (`Dockerfile`) and its start and stop scripts (`launch.sh`, `stop.sh`). A sandbox keeps its installs: stopping one commits it to `dev-desktop:<name>`, and the next container starts from that image. Installs meant for every sandbox go in `/data/cache/usrlocal`, which each sandbox mounts first on `PATH`.
 
